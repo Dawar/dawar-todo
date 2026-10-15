@@ -21,6 +21,15 @@ const LIMIT_BLOCKS = new Set(["spacing", "global-daily-limit", "bot-daily-limit"
 const STALE_PUBLICATION_MS = 24 * 36e5;
 const backoffMs = failures => Math.min(6 * 36e5, 5 * 6e4 * 2 ** Math.max(0, failures - 1));
 const TRIGGER_ORDER = { extract: 0, "loose-thread": 1, "follow-up": 2, activity: 3, baseline: 4 };
+/** Held-state budget for skipped reviews (bot-bridge/HELD_STATES.md). */
+export const INITIATIVE_SKIP_BUDGET_MS = 24 * 36e5;
+/** A bot whose due reviews have kept being skipped past the budget, in plain language. */
+export function initiativeSkipHold(state, now = Date.now()) {
+  const since = Date.parse(state?.skippedSince ?? "");
+  if (!Number.isFinite(since) || now - since < INITIATIVE_SKIP_BUDGET_MS) return null;
+  const hours = Math.floor((now - since) / 36e5), age = hours < 48 ? `${hours} hours` : `${Math.floor(hours / 24)} days`;
+  return { since: state.skippedSince, reason: `Proactive reviews have been skipped for ${age}${state.lastSkip ? `: ${String(state.lastSkip).replace(/\.$/, "")}` : ""}.` };
+}
 
 export const INITIATIVE_TOOL = {
   name: "bots_initiative",
@@ -50,6 +59,9 @@ export class InitiativeCoordinator {
   at() { return new Date(this.clock()).toISOString(); }
   botState(botId) { return this.store.get("initiativeBot", botId) ?? { id: botId, botId, failures: 0 }; }
   saveBotState(botId, patch) { return this.store.put("initiativeBot", { ...this.botState(botId), ...patch, id: botId, botId }); }
+  // A due review the node refused (busy, stopped) keeps its job; skippedSince
+  // makes a long run of such skips visible (initiativeSkipHold), not silent.
+  skip(botId, reason) { const at = this.at(); this.saveBotState(botId, { lastSkip: reason ?? "busy", lastSkipAt: at, skippedSince: this.botState(botId).skippedSince ?? at }); }
   reviews(states) { return this.store.list("initiativeReview").filter(r => states.has(r.state)); }
   names() { return Object.fromEntries(this.bots().map(b => [b.id, b.name ?? b.slug ?? b.id])); }
   /** Both providers are eligible; the node reports what it can actually run. */
@@ -108,6 +120,7 @@ export class InitiativeCoordinator {
     // baseline timer, at most `triageMaxReviews` per scan, best first.
     if (settings.triage) {
       const kept = reviews.filter(e => e.score > 1).sort((a, b) => b.score - a.score).slice(0, settings.triageMaxReviews);
+      // Triage is a deliberate choice, not a hold; it does not start skippedSince.
       for (const e of reviews) if (!kept.includes(e)) this.saveBotState(e.botId, { lastSkip: "triage", lastSkipAt: this.at() });
       reviews = kept;
     }
@@ -128,7 +141,7 @@ export class InitiativeCoordinator {
       }
       if (!probe.supported) { this.saveBotState(bot.id, { lastError: `Private reviews are unavailable for ${probe.provider} bots on this node.`, lastErrorAt: this.at() }); continue; }
       // Busy, stopped or unavailable bots keep their due job for a later scan.
-      if (!probe.idle) { this.saveBotState(bot.id, { lastSkip: probe.reason, lastSkipAt: this.at() }); continue; }
+      if (!probe.idle) { this.skip(bot.id, probe.reason); continue; }
       await this.startJob(bot, probe, settings, entry);
     }
   }
@@ -266,7 +279,7 @@ export class InitiativeCoordinator {
     const hinted = Date.parse(result.nextReviewAt ?? "") || 0;
     // Every completed review schedules another; the baseline is the earliest.
     const next = Math.min(this.clock() + 7 * 864e5, Math.max(this.clock() + baseline, hinted));
-    this.saveBotState(review.botId, { lastReviewAt: this.at(), nextReviewAt: new Date(next).toISOString(), failures: 0, backoffUntil: null,
+    this.saveBotState(review.botId, { lastReviewAt: this.at(), nextReviewAt: new Date(next).toISOString(), failures: 0, backoffUntil: null, skippedSince: null,
       lastOutcome: result.decision, lastError: null, lastRevision: capture.revision });
     return this.endReview(review, "accepted", { usage, packetTokens: v.packetTokens ?? null, decision: result.decision, itemIds: applied.items.map(i => i.id),
       publicationId: publication?.id ?? null, publicationBlock, ignored: applied.ignored });
@@ -388,12 +401,13 @@ export class InitiativeCoordinator {
       bots: this.bots().filter(b => !b.archived && !b.archiving && !b.deletedAt).map(b => {
         const state = this.botState(b.id);
         return { botId: b.id, name: b.name ?? b.slug ?? b.id, included: this.ledger.botSettings(b.id, settings).enabled, lastReviewAt: state.lastReviewAt ?? null,
-          nextReviewAt: state.nextReviewAt ?? null, failures: state.failures ?? 0, lastError: state.lastError ?? null, lastErrorAt: state.lastErrorAt ?? null };
+          nextReviewAt: state.nextReviewAt ?? null, failures: state.failures ?? 0, lastError: state.lastError ?? null, lastErrorAt: state.lastErrorAt ?? null,
+          skipped: initiativeSkipHold(state, this.clock()) };
       }),
       bot: { botId, enabled: this.ledger.botSettings(botId, settings).enabled, override: settings.bots[botId] ?? {},
         supported: true, lastReviewAt: s.lastReviewAt ?? null, nextReviewAt: s.nextReviewAt ?? null, lastExtractionAt: s.lastExtractionAt ?? null,
         lastOutcome: s.lastOutcome ?? null, failures: s.failures ?? 0, lastError: s.lastError ?? null, lastErrorAt: s.lastErrorAt ?? null,
-        backoffUntil: s.backoffUntil ?? null, lastPublishedAt: s.lastPublishedAt ?? null,
+        backoffUntil: s.backoffUntil ?? null, lastPublishedAt: s.lastPublishedAt ?? null, skipped: initiativeSkipHold(s, this.clock()),
         recentReviews: reviews.slice(0, 5).map(r => ({ id: r.id, kind: r.kind ?? "review", state: r.state, reason: r.reason ?? null, decision: r.decision ?? null, createdAt: r.createdAt,
           finishedAt: r.finishedAt ?? null, error: r.error ?? null, tokens: Number(r.usage?.totalTokens) || 0, packetTokens: r.packetTokens ?? null })),
         items: this.ledger.items().filter(i => i.responsibleBotId === botId && i.kind !== LOOSE_THREAD).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 10)

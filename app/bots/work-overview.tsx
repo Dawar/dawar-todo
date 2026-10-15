@@ -1,8 +1,9 @@
 "use client";
 import { useEffect, useRef, useState } from 'react';
-import { ArrowRight, Pause } from 'lucide-react';
+import { ArrowRight, Pause, TriangleAlert } from 'lucide-react';
 import type { Bot } from './single-thread-contract';
 import type { BotAdmissionWork, BotObservedInboxItem } from '../../lib/bot-work-view';
+import type { BotHeldItem, BotHeldRecovery } from '../../lib/bots-types';
 import { botsClient as client } from './client';
 import { useRunAction } from './run-action';
 import { Button } from '@/components/ui/button';
@@ -10,6 +11,8 @@ import './single-thread.css';
 import './work-overview.css';
 export function workLabel(work: BotAdmissionWork | undefined, bot: Bot) {
   if (!work || work.botId !== bot.id || ['provisioning', 'error'].includes(bot.status)) return null;
+  // A hold past its budget names itself instead of "Checking execution".
+  if (work.held && (!work.threadId || work.threadId === bot.threadId)) return work.held.label;
   if (work.threadId && work.threadId !== bot.threadId) return 'Checking execution';
   if (work.state === 'unconfirmed') return work.recovery?.kind === 'external-writer' ? 'Open in Codex elsewhere' :
     work.recovery?.kind === 'native-sign-in' ? 'Codex sign-in required' : 'Checking execution';
@@ -21,6 +24,34 @@ export function workLabel(work: BotAdmissionWork | undefined, bot: Bot) {
   if (work.paused || work.state === 'paused') return 'Automatic work paused';
   if (work.state === 'waiting' || (work.admission?.waitingCount ?? 0) > 0) return 'Waiting to start';
   return 'Ready';
+}
+const heldTime = (value: string) => new Date(value).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+/** Holds past their budget, with an owner Recover that re-reads native state. */
+export function HeldStatus({ owner, bot, work, online }: { owner: string; bot: Bot; work?: BotAdmissionWork; online: boolean }) {
+  const scope = JSON.stringify([owner, bot.id, bot.threadId]);
+  const [state, setState] = useState<{ scope: string; busy: string | null; message: string; error: boolean } | null>(null);
+  const held = work?.botId === bot.id && (!work.threadId || work.threadId === bot.threadId) ? work.held : null;
+  if (!held) return null;
+  const current = state?.scope === scope ? state : null;
+  const recover = async (item: BotHeldItem) => {
+    const key = `${item.kind}:${item.id}`;
+    setState({ scope, busy: key, message: '', error: false });
+    try {
+      const result = await client.rpc<BotHeldRecovery>('held.recover', bot.id, { kind: item.kind, id: item.id }, `held-recover:${crypto.randomUUID()}`, { owner });
+      setState({ scope, busy: null, error: !result.resolved,
+        message: result.resolved ? 'Recovered from the current native state. Nothing was resent.' : `Still held${result.error ? `: ${result.error}` : '.'} Nothing was resent.` });
+    } catch (error) { setState({ scope, busy: null, error: true, message: error instanceof Error ? error.message : String(error) }); }
+  };
+  return <section className="bots-held" aria-label="Held work">
+    <header><TriangleAlert size={17} aria-hidden="true" /><div><strong>{held.label}</strong><p>{held.reason}</p>
+      <p>Since {heldTime(held.since)}{held.lastError ? ` · Last error: ${held.lastError}` : ''}</p></div></header>
+    <ul>{held.held.map(item => { const key = `${item.kind}:${item.id}`; return <li key={key}><div><strong>{item.what}</strong>
+      <small>Since {heldTime(item.since)}{item.attempts ? ` · ${item.attempts} failed check${item.attempts === 1 ? '' : 's'}` : ''}{item.lastError ? ` · ${item.lastError}` : ''}</small></div>
+      {item.recoverable && <Button variant="outline" disabled={!online || Boolean(current?.busy)} onClick={() => void recover(item)}>{current?.busy === key ? 'Recovering…' : 'Recover'}</Button>}</li>; })}</ul>
+    {held.more > 0 && <p>{held.more} more held {held.more === 1 ? 'item' : 'items'}.</p>}
+    <p className="bots-held-note">Recover re-reads the conversation&rsquo;s current state and settles what it confirms. It never resends a message.</p>
+    {current?.message && <p role={current.error ? 'alert' : 'status'}>{current.message}</p>}
+  </section>;
 }
 export function NativeWriterRecovery({ bot, work, online }: { bot: Bot; work?: BotAdmissionWork; online: boolean }) {
   if (!online || work?.botId !== bot.id || work.threadId !== bot.threadId || work.state !== 'unconfirmed' || work.recovery?.kind !== 'external-writer') return null;

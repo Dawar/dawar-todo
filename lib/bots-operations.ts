@@ -111,6 +111,7 @@ export type BotOperations = {
   "bots.read": { params: { threadId?: string | null; updatedAt?: string }; result: Bot };
   "bots.recover": { params: Record<string, never>; result: Bot };
   "nativeRecovery.retry": {params:{threadId:string;failedTurnId:string};result:import('./bots-types').BotNativeRecovery};
+  "held.recover": {params:{kind:import('./bots-types').BotHeldKind;id:string};result:import('./bots-types').BotHeldRecovery};
   "bots.archive": { params: Record<string, never>; result: Bot };
   "bots.delete": {params: Record<string, never>; result: Bot};
   "bots.restore": { params: Record<string, never>; result: Bot };

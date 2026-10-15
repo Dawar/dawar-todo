@@ -118,14 +118,21 @@ export async function reconcileCurrentActivity(runtime, botId) {
   }
 }
 
-export async function recoverCurrentActivities(runtime, limit = 2, startup = false) {
+// The same durable due time reconcileCurrentActivity honours: a native error
+// recovery's nextRetryAt for the current thread, else the activity backoff.
+function dueAt(runtime, state) {
+  const recovery = runtime.nativeErrorRecovery?.get(state.botId);
+  return recovery?.threadId === runtime.store.bot(state.botId).threadId && recovery.nextRetryAt || state.reconcileAfter;
+}
+
+export async function recoverCurrentActivities(runtime, limit = 2, startup = false, eligible = () => true) {
   let checked = 0;
   const due = runtime.store.list("botActivity").filter(state => activityUnresolved(runtime, state.botId))
-    .sort((a, b) => (a.reconcileAfter ?? "").localeCompare(b.reconcileAfter ?? "") || a.id.localeCompare(b.id));
+    .sort((a, b) => (dueAt(runtime, a) ?? "").localeCompare(dueAt(runtime, b) ?? "") || a.id.localeCompare(b.id));
   for (const state of due) {
     if (checked >= limit) break;
-    if (runtime.locks.has(state.botId) || runtime.store.bot(state.botId).archived ||
-        (!startup && Date.parse(state.reconcileAfter ?? "") > Date.now())) continue;
+    if (runtime.locks.has(state.botId) || runtime.store.bot(state.botId).archived || !eligible(state.botId) ||
+        (!startup && Date.parse(dueAt(runtime, state) ?? "") > Date.now())) continue;
     checked++;
     await runtime.lock(state.botId, () => activityUnresolved(runtime, state.botId)
       ? reconcileCurrentActivity(runtime, state.botId) : undefined);

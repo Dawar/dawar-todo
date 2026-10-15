@@ -32,9 +32,12 @@ function advanceActivity(runtime, botId, activeTurnId, changes = {}) {
   runtime.privateReviews?.userActivity(botId);
   runtime.desktops?.cancelBrowserMaintenance(botId);
   if (activeTurnId && runtime.store.get("botActivity", botId)?.activeTurnId !== activeTurnId) protectBrowser(runtime, botId);
-  const token = captureActivity(runtime, botId);
+  const token = captureActivity(runtime, botId), prior = runtime.store.get("botActivity", botId);
   if (!Number.isSafeInteger(token.generation + 1)) throw new Error("Observed activity generation exhausted.");
-  runtime.store.put("botActivity", { ...runtime.store.get("botActivity", botId), ...changes,
+  // When this hold began, for the held-state budget (held-states.mjs).
+  const since = !Object.hasOwn(changes, "unresolved") ? {} : changes.unresolved === true
+    ? { unresolvedSince: prior?.unresolved === true ? prior.unresolvedSince ?? now() : now() } : { unresolvedSince: null };
+  runtime.store.put("botActivity", { ...prior, ...changes, ...since,
     ...(Object.hasOwn(changes, 'reconciliationError') && changes.reconciliationError === null ? { recoveryKind: null, recoveryCheckedAt: null } : {}),
     id: botId, botId, threadId: runtime.store.bot(botId).threadId, generation: token.generation + 1, activeTurnId });
 }

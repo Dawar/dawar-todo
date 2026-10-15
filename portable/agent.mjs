@@ -35,6 +35,7 @@ import {agentSnapshot} from './agent-snapshot.mjs';
 import {agentConnectionURL,centralLoopback} from './central-loopback.mjs';
 import {originalJournalReceipt} from './receipt-recovery.mjs';
 import {reconcileActiveTurns,reconcileAcceptedInbox} from '../bot-bridge/turn-state.mjs';
+import {recoverCurrentActivities} from '../bot-bridge/current-activity.mjs';
 const fingerprintLegacy=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export class AgentTransport {
@@ -48,6 +49,12 @@ export class AgentTransport {
     runtime.nativeRecoveryControl=botId=>{
       const c=journal.db.prepare('SELECT * FROM node_controls WHERE bot_id=?').get(botId);
       return runtime.relayOnline && c && journal.canAdmit({bot_id:botId,epoch:c.epoch}) ? {epoch:c.epoch,revision:c.revision,stopped:c.stopped} : null;
+    };
+    // Owner notices travel to the hub as durable journaled events (hub-notices.mjs).
+    runtime.noticeSink=notice=>{
+      if(!/^[a-f0-9]{64}$/.test(notice?.id??'')||!journal.db.prepare('SELECT 1 FROM node_controls WHERE bot_id=?').get(notice.botId))return false;
+      runtime.emitEvent('notice',{id:notice.id,title:String(notice.title??'Bot').slice(0,160),body:String(notice.body??'').slice(0,1000)},notice.botId);
+      return true;
     };
     this.taskRequests=new AgentTaskRequests(this);
     this.operator=new AgentOperator(this);
@@ -74,7 +81,7 @@ export class AgentTransport {
   hello(){return {protocol:PROTOCOL_VERSION,runtime:RUNTIME_VERSION,platform:process.platform,arch:process.arch,agentEpoch:this.runtime.epoch,
     // Paired consumers are selected explicitly for the reviewed Linux release;
     // unrelated/native-autonomous capabilities are not implied by this switch.
-    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',submissionSources:Boolean(this.runtime.sources.owner?.key),...centralAgentCapabilities(this.config),autonomousGoals:true,nativeErrorRecovery:true,nativeAuthRecovery:true,durableReceiptRecovery:true,botCreation:true,nativeCompaction:true,privateReviews:this.runtime.privateReviews?2:false}};}
+    capabilities:{text:true,localStdio:true,registeredArtifacts:true,profileReads:true,memoryCompaction:process.platform==='linux',pdfPreview:process.platform==='linux',desktop:process.platform==='linux'&&!!this.runtime.desktops,voice:false,secureTransfer:process.platform==='linux'&&!!this.runtime.secure,centralBursts:process.platform==='linux',submissionSources:Boolean(this.runtime.sources.owner?.key),...centralAgentCapabilities(this.config),autonomousGoals:true,nativeErrorRecovery:true,heldRecovery:true,nativeAuthRecovery:true,durableReceiptRecovery:true,botCreation:true,nativeCompaction:true,privateReviews:this.runtime.privateReviews?2:false}};}
   send(value){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(value));}
   controlRequest(botId,tool,args){
     if(!HUB_TOOLS.has(tool))throw Error('Unsupported hub tool.');
@@ -125,6 +132,13 @@ export class AgentTransport {
       // Accepted inbox rows whose original turn is no longer current (an older
       // missed completion) settle from that exact turn's terminal native fact.
       if(!this.runtime.maintenance.holding())await this.runtime.maintenance.track(()=>reconcileAcceptedInbox(this.runtime,2,assigned)).catch(error=>this.runtime.emit('fault',error));
+      // runtime.tick is absent here, so unresolved current activity ("Checking
+      // execution") was re-checked only by a delivery attempt. The same bounded
+      // read-only check: 2 bots per pass, each bot's backoff, assigned only.
+      if(!this.runtime.maintenance.holding())await this.runtime.maintenance.track(()=>recoverCurrentActivities(this.runtime,2,false,assigned)).catch(error=>this.runtime.emit('fault',error));
+      // Held-state budgets, status and owner notices (held-states.mjs). Runs
+      // during maintenance too: a hold that outlasts its drain is reported.
+      try{this.runtime.held.tick();}catch(error){this.runtime.emit('fault',error);}
       // Idle compaction uses this existing loop (no runtime.tick here) and the
       // synchronized Stop/placement fence; offline controls admit nothing.
       // Not awaited: a slow native ACK must not stall receipt recovery.

@@ -44,7 +44,7 @@ import {
 import type { Bot } from "./single-thread-contract";
 import { BotAvatar as Avatar } from "./bot-avatar";
 import { ActiveTurnElapsed } from "./active-turn-elapsed";
-import { WorkOverview, AutomaticInbox, NativeWriterRecovery, workLabel } from "./work-overview";
+import { WorkOverview, AutomaticInbox, NativeWriterRecovery, HeldStatus, workLabel } from "./work-overview";
 import { GoalIndicator, NativeGoalPanel } from "./native-goal-panel";
 import { goalLabels, goalObservation } from "./native-goal-state";
 import { DetailsGroup, DetailsOverviewStatus } from "./bot-details-parts";
@@ -778,10 +778,12 @@ export function BotsWorkspace() {
                   queued={single ? work ? work.admission?.waitingCount ?? 0 : null : promptQueue.length}
                   goal={(() => { const goal = goalObservation(bot, work).goal; return goal ? { objective: goal.objective, status: goalLabels[goal.status] } : null; })()}
                   goalsSupported={single && botProvider(bot) !== "claude" && snapshot?.capabilities?.nativeGoals === 1} onOpen={openDetails} />
+                {single && <HeldStatus owner={owner} bot={bot} work={work} online={online} />}
                 <ChapterNavigation key={`chapters:${scope}:${bot.threadId ?? ""}`} owner={owner} bot={bot} online={online} onJumped={docked ? undefined : closeProfile} />
               </>,
               next: <>
                 <h3>Up next</h3><p className="bots-details-lead">Scheduled and queued work.</p>
+                {single && <HeldStatus owner={owner} bot={bot} work={work} online={online} />}
                 {single && <WorkOverview owner={owner} bot={bot} work={work} online={online} />}
                 {!single && !promptQueue.length && <div className="bots-details-empty"><ListOrdered size={27} strokeWidth={1.5} /><h3>A little breathing room</h3><p>Nothing is queued. Use Ctrl+Enter to save a message for the next turn.</p></div>}
                 {single && <AutomaticInbox owner={owner} bot={bot} work={work} online={online} />}

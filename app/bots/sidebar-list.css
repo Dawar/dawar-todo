@@ -104,3 +104,6 @@
 .bots-row .bots-extension { display: inline-block; margin-right: 6px; padding: 0 4px; border-radius: 4px; background: var(--muted); color: var(--muted-foreground); font-size: 12px; font-weight: 400; vertical-align: baseline; }
 
 .bots-row-config > span:not(.bots-row-model):not(.bots-row-team) { flex-shrink: 0; }
+.bots-row-held{display:flex;align-items:center;gap:4px;color:var(--destructive)}
+.bots-row-held>svg{flex:none}
+.bots-row-held>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

@@ -16,7 +16,7 @@ export type ProactiveSettings = ModeSettings & { scanMinutes: number; baselineMi
 export type LooseThread = { id: string; title: string; status: string; due: boolean; ageHours: number; responsibleBot: string; responsibleName: string;
   snoozedUntil: string | null; mentions: { bot: string; botId: string; at: string; quote: string }[] };
 export type BotStatusRow = { botId: string; name: string; included: boolean; lastReviewAt: string | null; nextReviewAt: string | null; failures: number;
-  lastError: string | null; lastErrorAt: string | null };
+  lastError: string | null; lastErrorAt: string | null; skipped?: { since: string; reason: string } | null };
 export type ProactiveStatus = { settings: ProactiveSettings; looseThreads: LooseThread[]; bots: BotStatusRow[];
   metrics: { publishedToday: number; reviewTokensToday: number; extractionTokensToday: number; openLooseThreads: number };
   bot: { botId: string; lastReviewAt: string | null; nextReviewAt: string | null; lastError: string | null; lastErrorAt: string | null } };
@@ -149,7 +149,7 @@ export function ProactiveGlobalView({ status, bots, state, disabled, onConfigure
             <span className="min-w-0 truncate font-medium text-foreground">{row.name}</span>
             <span className="text-muted-foreground"><span className="sm:hidden">Last look: </span>{when(row.lastReviewAt)}</span>
             <span className="text-muted-foreground"><span className="sm:hidden">Next look: </span>{when(row.nextReviewAt)}</span>
-            <span className="min-w-0 break-words text-muted-foreground"><span className="sm:hidden">Last problem: </span>{row.lastError ? `${row.lastError} (${when(row.lastErrorAt)})` : "None"}</span>
+            <span className="min-w-0 break-words text-muted-foreground"><span className="sm:hidden">Last problem: </span>{row.skipped ? row.skipped.reason : row.lastError ? `${row.lastError} (${when(row.lastErrorAt)})` : "None"}</span>
           </li>)}
         </ul>}
     </Section>

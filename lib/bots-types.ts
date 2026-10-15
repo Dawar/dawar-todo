@@ -315,7 +315,14 @@ export type BotWorkState = {
   state: "ready" | "working" | "waiting" | "needs-input" | "paused" | "unconfirmed" | "starting";
   activeTurnId: string | null; paused: boolean; summary: string | null; remaining: string | null; waitingFor: string[];
   goal: import("./codex-protocol/v2/ThreadGoal").ThreadGoal | null; goalObservedAt: string | null; migrationReason: string | null;
+  /** Holds past their budget (bot-bridge/held-states.mjs); absent on older runtimes. */
+  held?: BotHeld | null;
 };
+export type BotHeldKind = "activity" | "native-recovery" | "inbox" | "prompt-queue" | "run" | "burst" | "collaboration" | "maintenance";
+export type BotHeldItem = { kind: BotHeldKind; id: string; label: string; reason: string; what: string; since: string;
+  attempts: number | null; lastError: string | null; recoverable: boolean };
+export type BotHeld = { label: string; reason: string; lastError: string | null; since: string; held: BotHeldItem[]; more: number };
+export type BotHeldRecovery = { kind: BotHeldKind; id: string; resolved: boolean; superseded: { kind: string; id: string }[]; error?: string; held: BotHeld | null };
 export type BotInboxItem = { id: string; botId: string; kind: "schedule" | "secure-input" | "memory-maintenance" | "task-request"; sourceId: string; summary: string;
   state: "queued" | "dispatching" | "accepted" | "uncertain" | "cancelled" | "failed"; createdAt: string; turnId: string | null; waitReason: string | null };
 export type BotBurstMessage = { reply?: import("./bot-replies").BotReplyReference; id: string; botId: string; text: string; attachmentIds: string[]; createdAt: string;
