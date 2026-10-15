@@ -280,3 +280,63 @@ test('proactive reviews refused for longer than a day become a visible skip hold
   coordinator.saveBotState('bot-1', { lastReviewAt: new Date(now).toISOString(), skippedSince: null });
   assert.equal(initiativeSkipHold(coordinator.botState('bot-1'), now), null);
 });
+
+test('portable agent loop re-checks unresolved activity without a delivery attempt: 2 per pass, backoff honoured, assigned only', async t => {
+  const { dir, store, runtime, codex, bot } = await setup(t);
+  // Bundled like the shipped agent (it imports extensionless TypeScript).
+  const { build } = await import('esbuild');
+  const { cpSync, mkdirSync, mkdtempSync, rmSync } = await import('node:fs');
+  const { fileURLToPath, pathToFileURL } = await import('node:url');
+  const { RUNTIME_COMPANIONS } = await import('../portable/runtime-companions.mjs');
+  const root = fileURLToPath(new URL('../', import.meta.url));
+  mkdirSync(join(root, 'dist'), { recursive: true });
+  const bundle = mkdtempSync(join(root, 'dist', 'held-agent-test-'));
+  t.after(() => rmSync(bundle, { recursive: true, force: true }));
+  for (const name of RUNTIME_COMPANIONS) cpSync(join(root, 'bot-bridge', name), join(bundle, name));
+  await build({ entryPoints: [join(root, 'portable/agent.mjs')], outfile: join(bundle, 'agent.mjs'), bundle: true, platform: 'node', target: 'node24', format: 'esm', packages: 'external', logLevel: 'error' });
+  const { AgentTransport } = await import(pathToFileURL(join(bundle, 'agent.mjs')).href);
+  const { NodeJournal } = await import('../portable/control-store.mjs');
+  const { nodeKey } = await import('../portable/protocol.mjs');
+  const journal = new NodeJournal(join(dir, 'node-journal.sqlite'));
+  t.after(() => journal.close());
+  const ids = ['bot-a', 'bot-b', 'bot-c', 'bot-x'];
+  for (const id of ids) {
+    bot(id, id);
+    runtime.loaded.add(`thread-${id}`);
+    store.put('botActivity', { id, botId: id, threadId: `thread-${id}`, generation: 1, activeTurnId: null, unresolved: true, reason: 'native-thread-idle', attempts: 0, reconcileAfter: null });
+  }
+  // bot-x is not assigned to this node.
+  journal.synchronize(['bot-a', 'bot-b', 'bot-c'].map(bot_id => ({ bot_id, epoch: 1, control_revision: 1, stopped: 0 })));
+  const transport = new AgentTransport({ config: {}, runtime, journal, key: nodeKey(join(dir, 'node-key.pem')),
+    enrollment: { nodeId: 'node-1', owner: 'owner', hub: 'https://hub.test/' }, socketFactory: () => { throw Error('no socket'); } });
+  t.after(() => transport.close?.());
+  // Isolate this loop from the startup barrier pass, which re-checks admissible bots on its own.
+  transport.startup.recover = async () => {};
+  runtime.ready = true;
+  const unresolved = () => ids.filter(id => store.get('botActivity', id).unresolved);
+  const later = new Date(Date.now() + 5 * MINUTE).toISOString();
+
+  // Each bot's backoff holds: its own reconcileAfter, or a native recovery's nextRetryAt.
+  store.put('botActivity', { ...store.get('botActivity', 'bot-a'), reconcileAfter: later });
+  store.put('nativeErrorRecovery', { id: 'bot-b', botId: 'bot-b', threadId: 'thread-bot-b', failedTurnId: 'failed', attempts: 1, phase: 'pending',
+    errorCode: 'responseStreamDisconnected', nextRetryAt: later, createdAt: new Date().toISOString() });
+  // Maintenance holds the whole check.
+  runtime.maintenance.holding = () => true;
+  await transport.recover();
+  assert.deepEqual(unresolved(), ids);
+  delete runtime.maintenance.holding;
+
+  await transport.recover();
+  assert.deepEqual(unresolved(), ['bot-a', 'bot-b', 'bot-x'], 'only the due, assigned bot cleared');
+  assert.ok(!codex.calls.some(call => ['thread-bot-a', 'thread-bot-b', 'thread-bot-x'].includes(call.params?.threadId)), 'backed-off and unassigned bots were not read');
+
+  // Once due, at most two bots per pass.
+  store.put('botActivity', { ...store.get('botActivity', 'bot-a'), reconcileAfter: null });
+  store.put('nativeErrorRecovery', { ...store.get('nativeErrorRecovery', 'bot-b'), nextRetryAt: null });
+  store.put('botActivity', { ...store.get('botActivity', 'bot-c'), unresolved: true });
+  await transport.recover();
+  assert.equal(unresolved().filter(id => id !== 'bot-x').length, 1, 'two of three due bots per pass');
+  await transport.recover();
+  assert.deepEqual(unresolved(), ['bot-x'], 'unassigned bot keeps waiting');
+  assert.ok(!codex.calls.some(call => INPUT_METHODS.includes(call.method)), 'nothing was delivered');
+});

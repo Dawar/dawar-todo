@@ -35,6 +35,7 @@ import {agentSnapshot} from './agent-snapshot.mjs';
 import {agentConnectionURL,centralLoopback} from './central-loopback.mjs';
 import {originalJournalReceipt} from './receipt-recovery.mjs';
 import {reconcileActiveTurns,reconcileAcceptedInbox} from '../bot-bridge/turn-state.mjs';
+import {recoverCurrentActivities} from '../bot-bridge/current-activity.mjs';
 const fingerprintLegacy=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export class AgentTransport {
@@ -131,6 +132,10 @@ export class AgentTransport {
       // Accepted inbox rows whose original turn is no longer current (an older
       // missed completion) settle from that exact turn's terminal native fact.
       if(!this.runtime.maintenance.holding())await this.runtime.maintenance.track(()=>reconcileAcceptedInbox(this.runtime,2,assigned)).catch(error=>this.runtime.emit('fault',error));
+      // runtime.tick is absent here, so unresolved current activity ("Checking
+      // execution") was re-checked only by a delivery attempt. The same bounded
+      // read-only check: 2 bots per pass, each bot's backoff, assigned only.
+      if(!this.runtime.maintenance.holding())await this.runtime.maintenance.track(()=>recoverCurrentActivities(this.runtime,2,false,assigned)).catch(error=>this.runtime.emit('fault',error));
       // Held-state budgets, status and owner notices (held-states.mjs). Runs
       // during maintenance too: a hold that outlasts its drain is reported.
       try{this.runtime.held.tick();}catch(error){this.runtime.emit('fault',error);}
