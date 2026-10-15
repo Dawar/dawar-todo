@@ -200,6 +200,15 @@ export async function discover(probe, { source, unitId = DEFAULT_UNIT, siteUnitI
   };
 }
 
+/**
+ * Another run of this plan is active in its controller unit. `launch` runs the
+ * controller inside that very unit, so the unit's own process (same systemd
+ * invocation) is not a conflict.
+ */
+export function controllerConflict(controller, invocationId = process.env.INVOCATION_ID) {
+  if (!controller || ['inactive', undefined, ''].includes(controller.ActiveState)) return false;
+  return !(invocationId && controller.InvocationID === invocationId);
+}
 const instanceFields = ['operationId', 'controllerUnitId', 'receiptDirectory', 'featureAuthority'];
 const comparable = plan => {
   const copy = Object.fromEntries(Object.entries(plan).filter(([key]) => !instanceFields.includes(key)));
@@ -239,7 +248,7 @@ export async function verifyPlan(spec, probe) {
   for (const [kind, a] of Object.entries(spec.activations ?? {}))
     if (!existsSync(a.path) || fileHash(a.path) !== a.sha256) mismatches.push({ field: `activations.${kind}`, message: 'target activation receipt missing or changed' });
   const controller = spec.controllerUnitId && await probe.unit(spec.controllerUnitId).catch(() => null);
-  if (controller && !['inactive', undefined, ''].includes(controller.ActiveState)) mismatches.push({ field: 'controllerUnitId', message: `${spec.controllerUnitId} is already ${controller.ActiveState}` });
+  if (controllerConflict(controller)) mismatches.push({ field: 'controllerUnitId', message: `${spec.controllerUnitId} is already ${controller.ActiveState}` });
   if (mismatches.length) throw new PlanMismatch(mismatches);
   return { verified: true, fields: Object.keys(comparable(spec)).length };
 }
