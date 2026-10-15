@@ -90,21 +90,25 @@ export async function profileContext(bot, team = null, { onMemoryState = () => {
       const source = await profileFile(bot, file);
       let text = source.text;
       if (file === 'MEMORY.md') {
+        let blocked = null;
         const pending = await memoryCurrentState(bot, source);
         const id = memoryId(bot, source, source.workspaceIdentity);
         if (maintenanceId) text = await maintenanceMemoryContext(bot, maintenanceId, source);
         else if (source.size > PROFILE_LIMIT) {
-          let fallback;
+          let fallback = null;
           try { fallback = await memoryFallback(bot, id, source); }
-          catch (error) {
-            onMemoryState({ state: 'blocked', file, bytes: source.size, sourceHash: source.hash, operationId: id,
-              message: 'Oversized memory has no safe summary for its current version. Your message/files are retained; finish memory recovery first.' });
-            throw Object.assign(new Error(`MEMORY.md needs recovery before delivery: ${error.message} Your message and files are retained.`), { outcome: 'rejected' });
+          catch {
+            // Memory recovery runs in the background; it never holds ordinary
+            // conversation. Deliver a pointer to the exact current file rather
+            // than a stale summary or a rejection.
+            blocked = { state: 'blocked', file, bytes: source.size, sourceHash: source.hash, operationId: id,
+              message: 'Oversized memory has no reviewed summary for its current version yet. Messages still send with a pointer to the full file; memory maintenance will finish in the background.' };
+            text = `MEMORY.md is ${source.size} bytes, over the ${PROFILE_LIMIT}-byte inline limit, and its reviewed summary is not ready. Current source SHA-256 ${source.hash}. Read ${join(bot.cwd, 'MEMORY.md')} with your tools when its facts matter; do not treat older summaries as current. Finish original ${id} when idle.`;
           }
-          text = `${fallback.text}\n\nCurrent-source verified compact fallback; full ${source.size}-byte source retained at ${fallback.receipt.archive}. Source SHA-256 ${source.hash}. Semantic review ${fallback.receipt.reviewedAt}. Finish original ${id}; do not treat older summaries as fresh constraints.`;
+          if (fallback) text = `${fallback.text}\n\nCurrent-source verified compact fallback; full ${source.size}-byte source retained at ${fallback.receipt.archive}. Source SHA-256 ${source.hash}. Semantic review ${fallback.receipt.reviewedAt}. Finish original ${id}; do not treat older summaries as fresh constraints.`;
         }
-        onMemoryState(source.size >= MEMORY_TRIGGER ? { state: source.size > PROFILE_LIMIT && !maintenanceId ? 'fallback' : 'warning', file, bytes: source.size, sourceHash: source.hash, operationId: id,
-          message: source.size > PROFILE_LIMIT && !maintenanceId ? 'Using a compact summary reviewed against this exact memory version; its full archive is retained.' : 'Memory maintenance is pending. Current memory and messages are retained.' } : null);
+        onMemoryState(blocked ?? (source.size >= MEMORY_TRIGGER ? { state: source.size > PROFILE_LIMIT && !maintenanceId ? 'fallback' : 'warning', file, bytes: source.size, sourceHash: source.hash, operationId: id,
+          message: source.size > PROFILE_LIMIT && !maintenanceId ? 'Using a compact summary reviewed against this exact memory version; its full archive is retained.' : 'Memory maintenance is pending. Current memory and messages are retained.' } : null));
         if (pending) onMemoryState({ ...pending, file, bytes: source.size, sourceHash: source.hash });
         onMemoryContent({ kind: 'application', value: `Current file-memory reference for ${bot.id}, source SHA-256 ${source.hash}. This supersedes stale frozen MEMORY snippets, not the original run's permissions/scope.\n${text}` });
       }
