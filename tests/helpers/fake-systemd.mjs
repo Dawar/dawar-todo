@@ -11,7 +11,7 @@ import { join } from 'node:path';
 export class FakeSystemd {
   constructor({ unitDirectory, log, activatingMs = 0 }) {
     // `reverse` simulates units that pull a unit in: { 'x.service': { WantedBy: 'front.service' } }.
-    Object.assign(this, { unitDirectory, log, activatingMs, units: new Map(), commands: [], reverse: {}, afterCommand: null });
+    Object.assign(this, { unitDirectory, log, activatingMs, units: new Map(), commands: [], reverse: {}, afterCommand: null, enabled: new Set() });
     this.systemctl = (...args) => this.run(args);
   }
   unit(id) { if (!this.units.has(id)) this.units.set(id, { ActiveState: 'inactive', MainPID: 0, InvocationID: '', Job: '' }); return this.units.get(id); }
@@ -21,7 +21,10 @@ export class FakeSystemd {
     for (const file of [join(this.unitDirectory, id), ...this.dropIns(id)]) for (const raw of readFileSync(file, 'utf8').split('\n')) {
       const line = raw.trim(), i = line.indexOf('='); if (i < 0 || line.startsWith('[')) continue;
       const key = line.slice(0, i), value = line.slice(i + 1);
-      if (key === 'Environment') { const j = value.indexOf('='); c.env[value.slice(0, j)] = value.slice(j + 1); }
+      if (key === 'Environment') {
+        const text = /^".*"$/.test(value) ? value.slice(1, -1).replace(/\\(["\\])/g, '$1') : value, unquoted = text.replaceAll('%%', '%').replaceAll('$$', '$'), j = unquoted.indexOf('=');
+        c.env[unquoted.slice(0, j)] = unquoted.slice(j + 1);
+      }
       if (key === 'WorkingDirectory') c.cwd = value;
       if (key === 'ExecStart') c.exec = value ? value.split(/\s+/) : null;
       if (key === 'TimeoutStopSec') c.timeoutStopSec = value === 'infinity' ? Infinity : Number(value);
@@ -72,7 +75,7 @@ export class FakeSystemd {
     const [command, ...rest] = args, id = rest.find(a => a.endsWith('.service')), u = id && this.unit(id), wait = !rest.includes('--no-block');
     if (command === 'show') {
       return [`MainPID=${u.MainPID}`, `InvocationID=${u.InvocationID}`, `ActiveState=${u.ActiveState}`, `SubState=${u.ActiveState === 'active' ? 'running' : 'dead'}`,
-        'ControlGroup=', `Job=${u.Job}`, `LoadState=${existsSync(join(this.unitDirectory, id)) ? 'loaded' : 'not-found'}`, `DropInPaths=${this.dropIns(id).join(' ')}`, ...Object.entries(this.reverse[id] ?? {}).map(([k, v]) => `${k}=${v}`)].join('\n') + '\n';
+        'ControlGroup=', `Job=${u.Job}`, `LoadState=${existsSync(join(this.unitDirectory, id)) ? 'loaded' : 'not-found'}`, `FragmentPath=${existsSync(join(this.unitDirectory, id)) ? join(this.unitDirectory, id) : ''}`, `DropInPaths=${this.dropIns(id).join(' ')}`, ...Object.entries(this.reverse[id] ?? {}).map(([k, v]) => `${k}=${v}`)].join('\n') + '\n';
     }
     if (command === 'start') { if (u.stopping) { u.startAfterStop = true; return ''; } if (u.child || u.ActiveState === 'activating') return ''; this.launch(id); return ''; }
     if (command === 'stop') { const done = this.stop(id); if (wait) await done; return ''; }
@@ -80,6 +83,8 @@ export class FakeSystemd {
     if (command === 'kill') { u.child?.kill('SIGKILL'); return ''; }
     if (command === 'reset-failed') { if (u.ActiveState === 'failed') u.ActiveState = 'inactive'; return ''; }
     if (['daemon-reload', 'show-environment'].includes(command)) return '';
+    if (command === 'enable') { this.enabled.add(id); return ''; }
+    if (command === 'disable') { this.enabled.delete(id); return ''; }
     throw Error(`fake systemctl: unsupported ${args.join(' ')}`);
   }
   close() { for (const u of this.units.values()) { clearTimeout(u.killTimer); if (u.child) try { process.kill(-u.child.pid, 'SIGKILL'); } catch { /* gone */ } } }

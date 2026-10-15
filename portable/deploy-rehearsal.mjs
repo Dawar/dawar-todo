@@ -30,12 +30,16 @@ export async function rehearse(plan, { systemctl, unitDirectory = join(homedir()
   // Short root: the manager socket path must stay under the 108-byte limit.
   const root = mkdtempSync(join(rootBase, 'r-'));
   const unitId = `dawar-rehearsal-${basename(root).slice(2).toLowerCase().replace(/[^a-z0-9]/g, 'x')}.service`;
-  const hubBefore = JSON.parse(readPrivate(plan.currentHubConfigPath)), agentBefore = JSON.parse(readPrivate(hubBefore.agentConfigFile));
-  const data = { hub: join(root, 'data/hub'), agent: join(root, 'data/agent') };
+  // Each role copies only its own half: a hub plan has no agent config, a
+  // runner plan no hub config (SPLIT_HUB_RUNNER.md).
+  const role = plan.role ?? 'both';
+  const hubBefore = plan.currentHubConfigPath ? JSON.parse(readPrivate(plan.currentHubConfigPath)) : null;
+  const agentBefore = role === 'hub' ? null : JSON.parse(readPrivate(plan.currentAgentConfigPath ?? hubBefore.agentConfigFile));
+  const data = { ...(hubBefore ? { hub: join(root, 'data/hub') } : {}), ...(agentBefore ? { agent: join(root, 'data/agent') } : {}) };
   for (const directory of Object.values(data)) mkdirSync(directory, { recursive: true, mode: 0o700 });
   // Consistent online copies; the live databases are opened read-only.
   for (const path of plan.databases) {
-    const into = dirname(path) === hubBefore.dataDirectory ? data.hub : dirname(path) === agentBefore.dataDirectory ? data.agent : null;
+    const into = dirname(path) === hubBefore?.dataDirectory ? data.hub : dirname(path) === agentBefore?.dataDirectory ? data.agent : null;
     if (!into) throw Error(`Rehearsal cannot place ${path}.`);
     const db = new DatabaseSync(path, { readOnly: true });
     try { await backup(db, join(into, basename(path))); } finally { db.close(); }
@@ -45,14 +49,20 @@ export async function rehearse(plan, { systemctl, unitDirectory = join(homedir()
   const copyActivation = (path, kind) => { const to = join(activations, basename(dirname(path)), `${kind}-activation.json`); savePrivate(to, readPrivate(path, 16384)); return to; };
   const ports = { gatewayPort: await freePort(), sitePort: await freePort(), healthPort: await freePort() };
   const config = join(root, 'config');
-  const hub = { ...hubBefore, ...ports, dataDirectory: data.hub, agentConfigFile: join(config, 'agent.json'),
-    hub: { ...hubBefore.hub, activationReceipt: copyActivation(hubBefore.hub.activationReceipt, 'hub') }, voice: { enabled: false } };
-  const agent = { ...agentBefore, dataDirectory: data.agent,
-    agent: { ...agentBefore.agent, loopbackHubPort: ports.gatewayPort, workspaces: join(root, 'workspaces'), desktops: { enabled: false },
-      activationReceipt: copyActivation(agentBefore.agent.activationReceipt, 'agent') } };
-  savePrivate(join(config, 'hub.json'), JSON.stringify(hub, null, 2) + '\n');
-  savePrivate(join(config, 'agent.json'), JSON.stringify(agent, null, 2) + '\n');
-  savePrivate(join(config, 'rehearsal.json'), JSON.stringify({ models: plan.expectedModels, productionOperationId: plan.operationId }) + '\n');
+  const configPath = join(config, role === 'runner' ? 'agent.json' : 'hub.json');
+  if (hubBefore) {
+    const hub = { ...hubBefore, ...ports, dataDirectory: data.hub, ...(agentBefore ? { agentConfigFile: join(config, 'agent.json') } : { teamWorkspaceRoot: join(root, 'workspaces') }),
+      hub: { ...hubBefore.hub, activationReceipt: copyActivation(hubBefore.hub.activationReceipt, 'hub') }, voice: { enabled: false } };
+    savePrivate(join(config, 'hub.json'), JSON.stringify(hub, null, 2) + '\n');
+  }
+  if (agentBefore) {
+    const agent = { ...agentBefore, dataDirectory: data.agent,
+      agent: { ...agentBefore.agent, loopbackHubPort: ports.gatewayPort, workspaces: join(root, 'workspaces'), desktops: { enabled: false },
+        activationReceipt: copyActivation(agentBefore.agent.activationReceipt, 'agent'), ...(role === 'runner' ? { healthPort: ports.healthPort } : {}) } };
+    savePrivate(join(config, 'agent.json'), JSON.stringify(agent, null, 2) + '\n');
+  }
+  // Relay readiness is simulated: the hub stand-in reports the plan's nodes.
+  savePrivate(join(config, 'rehearsal.json'), JSON.stringify({ models: plan.expectedModels ?? [], nodes: plan.expectedNodes ?? [], productionOperationId: plan.operationId }) + '\n');
   // The temporary unit runs the stand-in from the OLD release directory, with
   // the live drop-in's own TimeoutStopSec so the derivation is exercised.
   const releasesRoot = dirname(plan.releaseDirectory), oldRelease = join(releasesRoot, plan.old.source);
@@ -60,7 +70,10 @@ export async function rehearse(plan, { systemctl, unitDirectory = join(homedir()
   const timeout = liveDropIn.split('\n').find(line => /^\s*TimeoutStopSec\s*=/.test(line)) ?? 'TimeoutStopSec=infinity';
   savePrivate(join(unitDirectory, unitId), `[Unit]\nDescription=DawarTodo deploy rehearsal ${plan.operationId} (temporary)\n\n[Service]\nType=simple\nUMask=0077\nKillMode=mixed\nEnvironment=BOTS_MACHINE_SECRET=${randomBytes(32).toString('hex')}\n`);
   const dropIn = join(unitDirectory, `${unitId}.d`, '90-portable-migration.conf');
-  savePrivate(dropIn, `[Service]\nWorkingDirectory=${oldRelease}\nExecStart=\nExecStart=${process.execPath} ${standIn} --release ${oldRelease} --config ${join(config, 'hub.json')}\n${timeout}\n`);
+  const standInRole = { both: 'both', cutover: 'both', hub: 'hub', runner: 'agent' }[role];
+  savePrivate(dropIn, `[Service]\nWorkingDirectory=${oldRelease}\nExecStart=\nExecStart=${process.execPath} ${standIn} run ${standInRole} --release ${oldRelease} --config ${configPath}\n${timeout}\n`);
+  // A cutover rehearsal installs its own temporary hub unit beside this one.
+  const hubUnitId = role === 'cutover' ? unitId.replace(/\.service$/, '-hub.service') : null;
   const systemd = systemctl ?? probe.systemctl;
   const result = { version: 1, kind: 'portable-deployment-rehearsal', productionOperationId: plan.operationId, source: plan.source, root, unitId, startedAt: now.toISOString() };
   try {
@@ -68,8 +81,9 @@ export async function rehearse(plan, { systemctl, unitDirectory = join(homedir()
     let ready = false;
     for (let i = 0; i < 120 && !ready; i++) { await pause(250); try { ready = (await probe.health(ports.healthPort)).ready === true; } catch { /* starting */ } }
     if (!ready) throw Error('The rehearsal stand-in for the current release did not become ready.');
-    const prepared = await preparePlan(probe, { source: plan.source, unitId, siteUnitId: null, site: false, receiptRoot: join(root, 'deployments'),
-      waitSeconds: Math.min(plan.waitSeconds, 300), timeoutStopSec: plan.timeoutStopSec, convergence: plan.convergence, rehearsal: true, now });
+    const prepared = await preparePlan(probe, { source: plan.source, role, unitId, siteUnitId: null, site: false, receiptRoot: join(root, 'deployments'),
+      waitSeconds: Math.min(plan.waitSeconds, 300), timeoutStopSec: plan.timeoutStopSec, convergence: plan.convergence, rehearsal: true, now,
+      ...(hubUnitId ? { hubUnitId, runnerHealthPort: await freePort() } : {}) });
     result.planPath = prepared.planPath;
     let receipt;
     try { receipt = await runDeployment(prepared.plan, linuxDeployment(prepared.plan, systemctl ? { systemctl, poll: 250 } : {})); }
@@ -81,9 +95,11 @@ export async function rehearse(plan, { systemctl, unitDirectory = join(homedir()
     result.endedAt = new Date().toISOString();
     if (!keep) {
       // Disposable copies: no drain proof is needed to end the stand-in.
-      try { await systemd('kill', '--signal=SIGKILL', unitId); } catch { /* not running */ }
-      try { await systemd('stop', unitId); } catch { /* already stopped */ }
-      rmSync(join(unitDirectory, unitId), { force: true }); rmSync(join(unitDirectory, `${unitId}.d`), { recursive: true, force: true });
+      for (const id of [unitId, ...(hubUnitId ? [hubUnitId] : [])]) {
+        try { await systemd('kill', '--signal=SIGKILL', id); } catch { /* not running */ }
+        try { await systemd('stop', id); } catch { /* already stopped */ }
+        rmSync(join(unitDirectory, id), { force: true }); rmSync(join(unitDirectory, `${id}.d`), { recursive: true, force: true });
+      }
       try { await systemd('daemon-reload'); } catch { /* reported by the next systemctl user */ }
       rmSync(root, { recursive: true, force: true });
       result.cleanedUp = true;

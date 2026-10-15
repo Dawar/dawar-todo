@@ -13,6 +13,7 @@ export function loadConfig(path = process.env.DAWAR_HUB_CONFIG) {
   if(c.backendReleaseDirectory!==undefined&&(!isAbsolute(c.backendReleaseDirectory)||c.mode!=='both'||c.externalSite!==true))
     throw Error('An installed backend override requires an absolute release and separately supervised site.');
   centralLoopback(c);
+  if(c.agent?.healthPort!==undefined&&(!Number.isInteger(c.agent.healthPort)||c.agent.healthPort<1024||c.agent.healthPort>65535))throw Error('Invalid runner health port.');
   if(c.agent?.centralRouting!==undefined&&typeof c.agent.centralRouting!=='boolean')throw Error('Invalid central routing configuration.');
   if(c.agent?.desktops!==undefined){
     const d=c.agent.desktops;

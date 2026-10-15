@@ -216,5 +216,5 @@ export function createVoiceRuntime(config,{assertWriter:assertControlWriter,writ
     void outcome.settled.catch(fault);
     if(outcome.failed)throw outcome.error;return outcome.value;
   }
-  return {fetch:admittedFetch,status,drain,store,close:()=>closing??=(async()=>{await drain();clearInterval(timer);store.close();closed=true;})()};
+  return {fetch:admittedFetch,status,idle,drain,store,close:()=>closing??=(async()=>{await drain();clearInterval(timer);store.close();closed=true;})()};
 }

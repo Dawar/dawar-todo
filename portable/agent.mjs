@@ -400,7 +400,7 @@ export async function runAgent(config){
   transport.recoveryTimer=setInterval(()=>void transport.recover().catch(error=>runtime.emit('fault',error)),5000);
   // No runtime.tick: logical queue/schedule authority must live at the hub.
   // Existing admitted native work and tool responses still stream normally.
-  return {runtime,transport,journal,manager};
+  return {runtime,transport,journal,manager,source:activation.source};
 }
 
 export const HUB_TEAM_REFERENCE_REUSE_MS=60000;

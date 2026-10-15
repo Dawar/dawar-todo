@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
 import { loadConfig } from './config.mjs';
 import { installDefinitions } from './services.mjs';
 import { nodeKey, PROTOCOL_VERSION, RUNTIME_VERSION } from './protocol.mjs';
@@ -92,20 +91,11 @@ if(command==='version') {
   process.umask(0o077);
   const {runBoth}=await import('./run-both.mjs');await runBoth(resolve(option('config')));
 } else if(command==='run' && args[0]==='hub') {
-  const c=loadConfig(option('config'));if(c.mode==='agent')throw Error('Agent configuration cannot start a hub.');
   process.umask(0o077);
-  const {startGateway}=await import('../dist/portable/gateway.mjs');
-  const gateway=startGateway(c);
-  const child=spawn(process.execPath,[join(root,'.next-portable/standalone/server.js')],{cwd:join(root,'.next-portable/standalone'),env:{...process.env,DAWAR_HUB_CONFIG:resolve(option('config')),PORT:String(c.sitePort??3211),HOSTNAME:'127.0.0.1'},stdio:'inherit'});
-  let shutdownConfirmed=false;
-  const retainedShutdown=()=>console.error('Hub shutdown is blocked by original active or unconfirmed voice work. Preserve its state and use the reviewed handoff.');
-  child.on('exit',()=>{void gateway.close().then(()=>process.exit(shutdownConfirmed?0:1)).catch(retainedShutdown);});
-  // Agents own their native maintenance boundary. Hub voice/provider work has
-  // its own drain and must finish before the local site is stopped.
-  for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>{void gateway.close().then(()=>{shutdownConfirmed=true;child.kill('SIGTERM');}).catch(retainedShutdown);});
+  const {runHub}=await import('./run-hub.mjs');await runHub(resolve(option('config')));
 } else if(command==='run' && args[0]==='agent') {
-  const c=loadConfig(option('config'));if(c.mode==='hub')throw Error('Hub configuration cannot start an agent.');
-  const {runAgent}=await import('../bot-bridge/portable-agent.mjs');await runAgent(c);
+  process.umask(0o077);
+  const {runRunner}=await import('./run-runner.mjs');await runRunner(resolve(option('config')));
 } else {
   throw Error('Use version, key, pair, install, run hub|agent, export-application, import-application, stage-control-snapshot, export-original-application, snapshot-key, or unseal-application.');
 }

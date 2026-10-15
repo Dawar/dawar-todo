@@ -5,10 +5,19 @@ The backend (hub, website writer, mailbox and bot runner in one process,
 once and starts the new release. Plans are generated from live state; nobody
 copies values into a plan by hand.
 
+Every plan has a role (`prepare --role`, default `both`). `both` is the
+combined process above. After the one-time cutover (`--role cutover`,
+`CUTOVER_RUNBOOK.md`) the hub and the runner are separate units and are
+released on their own: `--role hub` (website, login, mailbox, gateway:
+`dawar-portable-hub.service`) restarts only the hub and never drains or stops
+bots; `--role runner` (`dawar-todo-bots.service`, `run agent`) drains and
+restarts only the runner and never freezes the hub writer or restarts the
+site. The role table is in `SPLIT_HUB_RUNNER.md`.
+
 ## Flow
 
 ```bash
-node portable/deploy-cli.mjs prepare <40-char-sha>
+node portable/deploy-cli.mjs prepare <40-char-sha> [--role both|hub|runner|cutover]
 node portable/deploy-cli.mjs rehearse --plan <receipts>/<sha12>-<time>/plan.private.json
 node portable/deploy-cli.mjs launch   --plan <same plan>
 ```
@@ -113,6 +122,7 @@ The drain's `nativeRpc` count includes in-flight Claude backend requests.
 `ProviderRouter.pending` merges Codex and Claude calls, so per-thread work
 views see both.
 
-The hub/runner split is designed and staged in `SPLIT_HUB_RUNNER.md`.
+The hub/runner split is staged in `SPLIT_HUB_RUNNER.md`; stages 1–4 are
+implemented, and the cutover procedure is `CUTOVER_RUNBOOK.md`.
 
 Packaged releases ship `portable/deploy-cli.mjs` and `portable/rehearsal-service.mjs` as bundles (`portable/deploy-bundles.mjs`), because a release does not contain the individual bot-bridge source modules. `package.mjs` runs both bundles' help paths inside the package before publishing it.
