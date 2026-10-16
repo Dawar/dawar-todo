@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, readlinkSync } from 'node:fs';
@@ -51,11 +51,15 @@ export function deriveHubConfig(before, { source, releasesRoot, activationsRoot 
 }
 // healthPort: a number sets the runner's own /healthz port (cutover), null
 // removes it (combine: the combined process serves one /healthz).
-export function deriveAgentConfig(before, { source, activationsRoot, healthPort }) {
+export function deriveAgentConfig(before, { source, activationsRoot, healthPort, nativeBinaryPath, nativeBinarySHA256 }) {
   const after = structuredClone(before);
   after.agent = { ...after.agent, activationReceipt: join(activationsRoot, source, 'agent-activation.json'), ...(healthPort === undefined || healthPort === null ? {} : { healthPort }) };
+  if (nativeBinaryPath !== undefined) {
+    after.agent.codexBinary = nativeBinaryPath;
+    after.agent.codexBinarySHA256 = nativeBinarySHA256;
+  }
   if (healthPort === null) delete after.agent.healthPort;
-  onlyChanged(before, after, ['agent.activationReceipt', ...(healthPort === undefined ? [] : ['agent.healthPort'])], 'agent config');
+  onlyChanged(before, after, ['agent.activationReceipt', ...(nativeBinaryPath === undefined ? [] : ['agent.codexBinary', 'agent.codexBinarySHA256']), ...(healthPort === undefined ? [] : ['agent.healthPort'])], 'agent config');
   return after;
 }
 // Cutover: the combined hub config becomes a separate hub. It loses the agent
@@ -203,11 +207,31 @@ function targetManifest(releasesRoot, source) {
   if (manifest.source !== source || manifest.nodeMajor !== 24 || !/^\d+\.\d+\.\d+$/.test(manifest.runtime ?? '')) refuse('manifestSHA256', 'target manifest source/runtime/node differs');
   return { releaseDirectory, manifest, manifestSHA256: fileHash(manifestPath) };
 }
-function nativeBinary(agent) {
-  const path = agent.agent?.codexBinary;
+function nativeBinary(agent, runtime) {
+  let path = agent.agent?.codexBinary;
   if (!isAbsolute(path ?? '') || !existsSync(path)) refuse('nativeBinaryPath', 'agent config names no native binary');
   const digest = fileHash(path);
   if (agent.agent.codexBinarySHA256 && agent.agent.codexBinarySHA256 !== digest) refuse('nativeBinarySHA256', 'native binary differs from the agent config hash');
+  if (runtime !== undefined) {
+    const version = execFileSync(path, ['--version'], { encoding: 'utf8', timeout: 10000 }).trim();
+    if (version !== `codex-cli ${runtime}`) {
+      // Runtime upgrades use a separately installed immutable sibling package.
+      // Never change a moving launcher or the shared daemon's current pointer.
+      const packageRoot = dirname(dirname(path)), name = basename(packageRoot);
+      const match = /^(\d+\.\d+\.\d+)-(x86_64-unknown-linux-musl)$/.exec(name);
+      if (!match || basename(dirname(packageRoot)) !== 'releases' || version !== `codex-cli ${match[1]}`)
+        refuse('nativeBinaryPath', 'runtime upgrade requires a versioned managed Linux package');
+      const targetRoot = join(dirname(packageRoot), `${runtime}-${match[2]}`);
+      path = join(targetRoot, 'bin', 'codex');
+      if (!existsSync(path) || !existsSync(join(targetRoot, 'codex-package.json')))
+        refuse('nativeBinaryPath', 'install the target versioned runtime package before preparing deployment');
+      const layout = JSON.parse(readFileSync(join(targetRoot, 'codex-package.json'), 'utf8'));
+      if (layout.layoutVersion !== 1 || layout.version !== runtime || layout.target !== match[2] || layout.entrypoint !== 'bin/codex' ||
+          execFileSync(path, ['--version'], { encoding: 'utf8', timeout: 10000 }).trim() !== `codex-cli ${runtime}`)
+        refuse('nativeBinaryPath', 'target runtime package layout/version differs');
+      return { nativeBinaryPath: path, nativeBinarySHA256: fileHash(path) };
+    }
+  }
   return { nativeBinaryPath: path, nativeBinarySHA256: digest };
 }
 // Target activation receipts derived from the live ones. An existing receipt
@@ -293,7 +317,7 @@ export async function discover(probe, { source, role = 'both', unitId = defaultU
   const activationsRoot = dirname(dirname((hub ? hub.hub.activationReceipt : agent.agent.activationReceipt) ?? '/'));
   let nativeBinaryPath, nativeBinarySHA256, liveAgentActivation;
   if (agent) {
-    ({ nativeBinaryPath, nativeBinarySHA256 } = nativeBinary(agent));
+    ({ nativeBinaryPath, nativeBinarySHA256 } = nativeBinary(agent, manifest.runtime));
     liveAgentActivation = JSON.parse(readPrivate(agent.agent.activationReceipt, 16384));
     if (role === 'runner' && liveAgentActivation.source !== h.source) refuse('old.source', `live runner health ${short(h.source)} differs from its activation ${short(liveAgentActivation.source)}`);
   }
@@ -305,9 +329,9 @@ export async function discover(probe, { source, role = 'both', unitId = defaultU
   const dropIns = [releaseDropIn(u, unitId, releasesRoot)];
   const liveDropIn = readFileSync(dropIns[0], 'utf8');
   const changes = [];
-  if (role === 'both') changes.push([currentConfigPath, jsonText(deriveHubConfig(hub, { source, releasesRoot, activationsRoot }))], [agentPath, jsonText(deriveAgentConfig(agent, { source, activationsRoot }))]);
+  if (role === 'both') changes.push([currentConfigPath, jsonText(deriveHubConfig(hub, { source, releasesRoot, activationsRoot }))], [agentPath, jsonText(deriveAgentConfig(agent, { source, activationsRoot, nativeBinaryPath, nativeBinarySHA256 }))]);
   if (role === 'hub') changes.push([currentConfigPath, jsonText(deriveHubConfig(hub, { source, releasesRoot, activationsRoot }))]);
-  if (role === 'runner') changes.push([agentPath, jsonText(deriveAgentConfig(agent, { source, activationsRoot }))]);
+  if (role === 'runner') changes.push([agentPath, jsonText(deriveAgentConfig(agent, { source, activationsRoot, nativeBinaryPath, nativeBinarySHA256 }))]);
   let split;
   if (role === 'cutover') {
     if (!Number.isInteger(runnerHealthPort) || runnerHealthPort < 1024 || runnerHealthPort > 65535 || [healthPort, hub.gatewayPort ?? 3210, hub.sitePort ?? 3211].includes(runnerHealthPort)) refuse('runnerHealthPort', 'must be a free loopback port distinct from the hub ports');
@@ -316,7 +340,7 @@ export async function discover(probe, { source, role = 'both', unitId = defaultU
     const hubUnit = await probe.unit(hubUnitId), hubUnitPath = join(dirname(u.FragmentPath), hubUnitId), hubDropInPath = join(`${hubUnitPath}.d`, HUB_RELEASE_DROP_IN);
     if (hubUnit.LoadState === 'loaded' || existsSync(hubUnitPath) || existsSync(`${hubUnitPath}.d`)) refuse('hubUnitId', `${hubUnitId} already exists; the cutover only installs a new hub unit`);
     changes.push([currentConfigPath, jsonText(deriveSplitHubConfig(hub, agent, { source, activationsRoot }))],
-      [agentPath, jsonText(deriveAgentConfig(agent, { source, activationsRoot, healthPort: runnerHealthPort }))]);
+      [agentPath, jsonText(deriveAgentConfig(agent, { source, activationsRoot, nativeBinaryPath, nativeBinarySHA256, healthPort: runnerHealthPort }))]);
     split = { hubUnitId, hubUnitPath, hubDropInPath, runnerHealthPort,
       created: [[hubUnitPath, hubUnitFile({ hubConfigPath: currentConfigPath, environment: probe.processEnvironment(pid, HUB_ENVIRONMENT) })], [hubDropInPath, hubDropIn(liveDropIn, { source, releasesRoot, timeoutStopSec, hubConfigPath: currentConfigPath })]] };
   }
@@ -399,7 +423,7 @@ async function discoverCombine(probe, { source, unitId, hubUnitId, siteUnitId, w
   const releasesRoot = dirname(cwd);
   if (dirname(hubCwd) !== releasesRoot) refuse('releaseDirectory', 'the hub and the runner run from different release roots');
   const { releaseDirectory, manifest, manifestSHA256 } = targetManifest(releasesRoot, source);
-  const { nativeBinaryPath, nativeBinarySHA256 } = nativeBinary(agent);
+  const { nativeBinaryPath, nativeBinarySHA256 } = nativeBinary(agent, manifest.runtime);
   const liveAgentActivation = JSON.parse(readPrivate(agent.agent.activationReceipt, 16384));
   if (liveAgentActivation.source !== r.source) refuse('split.runnerSource', `live runner health ${short(r.source)} differs from its activation ${short(liveAgentActivation.source)}`);
   const activationsRoot = dirname(dirname(hub.hub.activationReceipt ?? '/'));
@@ -415,7 +439,7 @@ async function discoverCombine(probe, { source, unitId, hubUnitId, siteUnitId, w
   const hubDropIns = String(hu.DropInPaths ?? '').split(/\s+/).filter(Boolean);
   if (hubDropIns.length !== 1 || hubDropIns[0] !== hubDropInPath) refuse('split.hubDropInPath', `${hubUnitId} must have exactly its release drop-in ${HUB_RELEASE_DROP_IN}; found ${hubDropIns.length ? hubDropIns.map(p => basename(p)).join(', ') : 'none'}`);
   const changes = [[hubPath, jsonText(deriveCombinedHubConfig(hub, { source, releasesRoot, activationsRoot, agentConfigPath: agentPath }))],
-    [agentPath, jsonText(deriveAgentConfig(agent, { source, activationsRoot, healthPort: null }))],
+    [agentPath, jsonText(deriveAgentConfig(agent, { source, activationsRoot, nativeBinaryPath, nativeBinarySHA256, healthPort: null }))],
     [runnerDropIn, deriveCutoverDropIn(readFileSync(runnerDropIn, 'utf8'), { source, releasesRoot, timeoutStopSec, hubConfigPath: hubPath, agentConfigPath: agentPath, from: 'agent', role: 'both' })]];
   // Removed files have a null afterSHA256: rollback restores them from backup.
   const files = [...changes.map(([path, text]) => ({ path, beforeSHA256: fileHash(path), afterSHA256: sha256(text), prepared: text })),
