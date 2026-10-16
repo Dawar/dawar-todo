@@ -358,6 +358,7 @@ export async function discover(probe, { source, role = 'both', unitId = defaultU
   const portableRoot = dirname(releasesRoot);
   return {
     version: 1, kind: 'portable-deployment', ...(role === 'both' ? {} : { role }), source, runtime: manifest.runtime, waitSeconds,
+    ...(agent && manifest.runtime !== h.codexVersion ? { backupDatabases: true } : {}),
     unitId, releaseDirectory, manifestSHA256,
     ...(agent ? { managerSocket: join(agent.dataDirectory, 'manager', 'manager.sock'), nativeBinaryPath, nativeBinarySHA256, expectedModels: models } : {}),
     // A hub release proves the runners connected before it reconnect.
@@ -524,7 +525,7 @@ export async function verifyPlan(spec, probe) {
 
 // Config keys a role derivation may change; nothing else (and no secret) is
 // ever shown by a preview.
-const PREVIEW_KEYS = ['mode', 'agentConfigFile', 'backendReleaseDirectory', 'teamWorkspaceRoot', 'hub.source', 'hub.activationReceipt', 'agent.activationReceipt', 'agent.healthPort'];
+const PREVIEW_KEYS = ['mode', 'agentConfigFile', 'backendReleaseDirectory', 'teamWorkspaceRoot', 'hub.source', 'hub.activationReceipt', 'agent.activationReceipt', 'agent.healthPort', 'agent.codexBinary', 'agent.codexBinarySHA256'];
 const at = (value, path) => path.split('.').reduce((v, k) => v?.[k], value);
 /**
  * `deploy preview <sha> --role R --out DIR`: what prepare would generate, read
