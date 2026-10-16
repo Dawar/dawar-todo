@@ -255,7 +255,7 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
     async prepareHold(){
       if(!native)return {hub:{operationId:spec.operationId,unitId:spec.controllerUnitId}};
       const h=await health(nativeHealthPort);
-      const hold={operationId:spec.operationId,commit:spec.old.source,version:spec.runtime,instanceId:h.maintenance.instanceId,
+      const hold={operationId:spec.operationId,commit:spec.old.source,version:h.codexVersion,instanceId:h.maintenance.instanceId,
         invocationId:spec.old.invocationId,unitId:spec.controllerUnitId,waitSeconds:spec.waitSeconds};
       return {native:hold,...(spec.compatibilityBootstrap?{nativeProcess:await nativeProof(spec.old.pid)}:{})};
     },
