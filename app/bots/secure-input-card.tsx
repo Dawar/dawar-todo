@@ -82,12 +82,13 @@ function SecureForm({ request, online, onClose, onReceived }: {
   {error && <p role="alert">{error}</p>}<Button type="submit" disabled={busy || !online || !client.online}>{busy ? 'Transferring…' : sealed ? 'Retry same submission' : 'Submit securely'}</Button>
  </form>;
 }
-export function SecureInputCard({ request, online, supported = true }: {
+export function SecureInputCard({ request, online, supported = true, defaultOpen = false }: {
     request: SecureRequest;
     online: boolean;
     supported?: boolean;
+    defaultOpen?: boolean;
 }) {
-    const [open, setOpen] = useState(false), [receipt, setReceipt] = useState<SecureRequest | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(false);
+    const [open, setOpen] = useState(defaultOpen && request.state === 'waiting'), [receipt, setReceipt] = useState<SecureRequest | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(false);
     const current = receipt?.state === 'deleted' ? receipt : request.state !== 'waiting' ? request : receipt ?? request;
     const terminal = current.state !== 'waiting';
     const stateLabel = current.state === 'waiting' ? 'Input requested' : current.state === 'received' ? 'Delivered' : current.state === 'unavailable' ? 'Unavailable' : current.state === 'expired' ? 'Expired' : 'Deleted';
@@ -111,9 +112,10 @@ export function SecureInputCard({ request, online, supported = true }: {
   </div>}{error && <p role="alert">{error}</p>}
  </details>;
 }
-/** Active requests are reachable independently of a virtual history window. */
-export function SecureInputAccess({ state }: { state: ReturnType<typeof useSecureInputRequests> }) {
-    const waiting = state.requests.filter(r => r.state === 'waiting');
+/** Waiting requests render inline in the conversation. This bar keeps any
+ * waiting request whose position is outside the loaded history window reachable. */
+export function SecureInputAccess({ state, inline = [] }: { state: ReturnType<typeof useSecureInputRequests>; inline?: string[] }) {
+    const waiting = state.requests.filter(r => r.state === 'waiting' && !inline.includes(r.id));
     const [open, setOpen] = useState(false), [selected, setSelected] = useState<string[]>([]);
     const [opener, setOpener] = useState<HTMLButtonElement | null>(null);
     if (!waiting.length && !state.error && !open) return null;
