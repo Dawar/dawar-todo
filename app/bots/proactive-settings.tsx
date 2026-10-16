@@ -4,11 +4,9 @@ import { ArrowLeft } from "lucide-react";
 import { botsClient } from "./client";
 import type { Bot } from "../../lib/bots-types";
 import { Button } from "@/components/ui/button";
-import { ProactiveGlobalView, type ProactiveStatus, type SaveState, type ThreadAction } from "./proactive-views";
+import { ProactiveGlobalView, type ProactiveStatus, type SaveState } from "./proactive-views";
 
-/** A snoozed loose thread comes back in a week. */
-const snoozeUntil = () => new Date(Date.now() + 7 * 864e5).toISOString();
-type Method = "initiative.read" | "initiative.configure" | "initiative.thread";
+type Method = "initiative.read" | "initiative.configure" | "initiative.think";
 
 /**
  * Reads and changes proactive settings through any bot's scope (settings are
@@ -39,15 +37,14 @@ export function useProactive(owner: string, botId: string | null, online: boolea
   const read = useCallback(() => run("initiative.read", {}, null), [run]);
   const configure = useCallback((patch: Record<string, unknown>, section: string) =>
     run("initiative.configure", { patch, expectedRevision: status?.settings.revision ?? null }, section), [run, status?.settings.revision]);
-  const thread = useCallback((itemId: string, action: ThreadAction) =>
-    run("initiative.thread", { itemId, action, until: action === "snooze" ? snoozeUntil() : null }, "thread"), [run]);
-  return { status, state, loading, read, configure, thread };
+  const thinkNow = useCallback(() => run("initiative.think", {}, "think"), [run]);
+  return { status, state, loading, read, configure, thinkNow };
 }
 
 /** Full-page "Proactive bots" settings inside the bots workspace (?view=proactive). */
 export function ProactiveSettingsPage({ owner, online, bots, onClose }: { owner: string; online: boolean; bots: Bot[]; onClose: () => void }) {
   const active = bots.filter(bot => !bot.archived), scopeBot = active[0]?.id ?? null;
-  const { status, state, loading, read, configure, thread } = useProactive(owner, scopeBot, online);
+  const { status, state, loading, read, configure } = useProactive(owner, scopeBot, online);
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => { heading.current?.focus(); }, []);
   useEffect(() => { void read(); }, [read]);
@@ -60,7 +57,7 @@ export function ProactiveSettingsPage({ owner, online, bots, onClose }: { owner:
       <div className="mx-auto w-full max-w-3xl px-4 py-5 sm:px-8 sm:py-7">
         {!scopeBot ? <p className="text-sm text-muted-foreground">Create a bot first; proactive settings apply to your bots.</p>
           : !status ? <p role="status" className="text-sm text-muted-foreground">{!online ? "Connect to change proactive settings." : state.error || (loading ? "Loading proactive settings…" : "")}</p>
-          : <ProactiveGlobalView status={status} bots={active} state={state} disabled={!online} onConfigure={(patch, section) => void configure(patch, section)} onThread={(id, action) => void thread(id, action)} />}
+          : <ProactiveGlobalView status={status} bots={active} state={state} disabled={!online} onConfigure={(patch, section) => void configure(patch, section)} />}
       </div>
     </div>
   </section>;

@@ -1,17 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "./store.mjs";
 import { BotRuntime } from "./runtime.mjs";
 import { managedExecutionParams, PRIVATE_REVIEW } from "./execution-access.mjs";
-import { InitiativeLedger, validateReviewResult, classifyReply, limitDay, publicationText, mentionWhen, resurfaceAt, looseThreadPriority, LOOSE_THREAD } from "./initiative-ledger.mjs";
-import { InitiativeCoordinator, localExecutor, ownerReplyText } from "./initiative-coordinator.mjs";
-import { PRIVATE_REVIEW_CONFIG, claudeNearLimit, pushPreview } from "./initiative-node.mjs";
-import { readOwnerMessages, validateExtraction, ownerAuthored } from "./initiative-mentions.mjs";
-import { buildReviewPacket, estimateTokens, recentConversation } from "./initiative-packet.mjs";
+import { readSettings, configureSettings, upgradeSettings, validateThought, mergeLoops, nextThinkDelay, inQuietHours, quietEndsAt, localTime } from "./mind.mjs";
+import { InitiativeCoordinator, localExecutor } from "./initiative-coordinator.mjs";
+import { claudeNearLimit, pushPreview } from "./initiative-node.mjs";
+import { recentConversation } from "./initiative-packet.mjs";
 import { conversationViewPage } from "./conversation-view.mjs";
 import { ClaudeBackend } from "./claude.mjs";
 import { ProviderRouter } from "./provider-router.mjs";
@@ -33,7 +32,7 @@ class InitiativeCodex extends EventEmitter {
   reply = () => null; // (kind, params) => output object/string, or null to finish manually
   usage = { totalTokens: 1200, inputTokens: 1000, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 200, reasoningOutputTokens: 50 };
   threads = new Map([["thread-main", { id: "thread-main", status: { type: "idle" }, turns: [
-    { id: "turn-1", status: "completed", startedAt: sec("2026-10-13T15:00:00Z"), itemsView: "full", items: [
+    { id: "turn-1", status: "completed", startedAt: sec("2026-10-15T13:00:00Z"), itemsView: "full", items: [
       owner("u1", "We should call Acme about their renewal before Friday."),
       answer("a1", "Noted.")] }] }]]);
   inflight = new Set();
@@ -65,7 +64,7 @@ class InitiativeCodex extends EventEmitter {
       const turn = { id: `turn-${this.calls.length}`, status: "inProgress", items: [] };
       thread.turns.push(turn);
       if (thread.private) {
-        const kind = params.outputSchema?.properties?.mentions ? "extract" : "review";
+        const kind = params.outputSchema?.properties?.thought ? "think" : "speak";
         const out = this.reply(kind, params);
         if (out !== null) {
           // Emitted after this call returns, like the app-server; awaitable through settled().
@@ -87,28 +86,15 @@ class InitiativeCodex extends EventEmitter {
   reject(id, message) { this.answers.push({ id, error: message }); }
 }
 
-const NO_MENTIONS = { mentions: [], resolutions: [] };
-const ACME = { mentions: [{ message_id: "u1", quote: "call Acme about their renewal", item_id: null, key: "client-acme-renewal", title: "Call Acme about the renewal",
-  category: "client", entity: "Acme", importance: "high", time_sensitive: false, due_in_hours: null, summary: "Renewal call before Friday.", better_bot_id: null }], resolutions: [] };
-function review(overrides = {}) {
-  return { decision: "publish", next_review_hours: null, ledger_updates: [],
-    contribution: { kind: "opportunity", item_id: null, key: "release-notes-template", title: "Release notes template",
-      why_now: "Three releases this week repeated the same manual steps.", evidence: ["turn-1: release notes were written by hand"],
-      message: "I noticed release notes are assembled by hand each time. A small template would save about 20 minutes per release.",
-      expected_value: "About 20 minutes saved per release (estimate).", effort_estimate: "Roughly one hour (estimate).",
-      first_step: "Draft the template from the last three releases.", proposed_action: null, changed_circumstances: false, ...overrides.contribution },
-    ...overrides.top };
-}
-const NONE = { decision: "none", contribution: null, ledger_updates: [], next_review_hours: null };
-const output = overrides => JSON.stringify(review(overrides));
-function threadProposal(itemId, extra = {}) {
-  return review({ contribution: { kind: "loose-thread", item_id: itemId, key: "client-acme-renewal", title: "Call Acme about the renewal",
-    why_now: "Friday is close and nothing was scheduled.", evidence: ["mention u1"], message: "Nothing has been scheduled yet and the renewal window closes Friday. I can put it on your list now.",
-    proposed_action: { type: "todo", detail: "Create a todo “Call Acme about the renewal” due Thursday." }, ...extra } });
-}
+const QUIET = { thought: "Acme renewal is on Friday; nothing scheduled yet, but it's only Thursday morning.", loops: [{ id: null, title: "Acme renewal call", status: "open", note: "before Friday" }],
+  decision: "quiet", message: null, check_back_minutes: null };
+const SPEAK = { thought: "Friday is close and the Acme call still isn't on his calendar; worth a nudge.", loops: [{ id: null, title: "Acme renewal call", status: "raised", note: "asked him to book it" }],
+  decision: "speak", message: "The Acme renewal is Friday and there's no call booked yet. Want me to put a 20-minute slot on your calendar for tomorrow morning?", check_back_minutes: null };
+const SPOKEN = { message: "Quick one: the Acme renewal is Friday and nothing's booked. Shall I hold 20 minutes tomorrow at 9 for the call?" };
+const thinkReply = (thought = QUIET, speech = SPOKEN) => kind => kind === "think" ? thought : speech;
 
-async function setup(t, { bots = ["atlas"], reply = () => null, enable = true } = {}) {
-  const dir = await mkdtemp(join(tmpdir(), "initiative-test-"));
+async function setup(t, { bots = ["atlas"], reply = thinkReply(), enable = true, at = "2026-10-15T14:00:00Z" } = {}) {
+  const dir = await mkdtemp(join(tmpdir(), "mind-test-"));
   const store = new Store(join(dir, "state.sqlite")), codex = new InitiativeCodex();
   codex.reply = reply;
   for (const [i, id] of bots.entries()) {
@@ -120,7 +106,7 @@ async function setup(t, { bots = ["atlas"], reply = () => null, enable = true } 
   const runtime = new BotRuntime({ store, codex, root: join(dir, "bots") });
   await runtime.start();
   t.after(async () => { runtime.usage?.stop?.(); store.close(); await rm(dir, { recursive: true, force: true }); });
-  const clock = { t: Date.parse("2026-10-15T14:00:00Z") };
+  const clock = { t: Date.parse(at) };
   runtime.privateReviews.clock = () => clock.t;
   const coordinator = new InitiativeCoordinator({ store, executor: localExecutor(runtime), bots: () => store.bots(), clock: () => clock.t, random: () => 0 });
   if (enable) coordinator.ledger.configure({ enabled: true });
@@ -129,85 +115,237 @@ async function setup(t, { bots = ["atlas"], reply = () => null, enable = true } 
   return { dir, store, codex, runtime, coordinator, clock, drive };
 }
 const jobStarts = codex => codex.calls.filter(c => c.method === "thread/start" && c.params.ephemeral);
+const jobTurns = codex => codex.calls.filter(c => c.method === "turn/start" && c.params.threadId.startsWith("job-"));
 const mainTurns = codex => codex.calls.filter(c => c.method === "turn/start" && c.params.threadId === "thread-main");
-const kinds = store => store.list("initiativeReview").map(r => `${r.kind}:${r.state}`);
+const kinds = store => store.list("initiativeReview").sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map(r => `${r.kind}:${r.state}`);
+const journal = (store, botId = "atlas") => store.list("mindEntry", botId).sort((a, b) => a.at.localeCompare(b.at));
 
-test("disabled by default: no job, thread or message", async t => {
-  const dir = await mkdtemp(join(tmpdir(), "initiative-off-"));
+test("settings: off by default, light thinking models, and older settings keep only what still applies", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "mind-off-"));
   const store = new Store(join(dir, "s.sqlite"));
   t.after(async () => { store.close(); await rm(dir, { recursive: true, force: true }); });
-  const ledger = new InitiativeLedger(store);
-  assert.equal(ledger.settings().enabled, false);
-  assert.equal(ledger.settings().baselineMinutes, 360);
-  // Version 2 defaults: cheap pinned review models at medium effort, always-on pacing.
-  const d = ledger.settings();
-  assert.deepEqual([d.model, d.claudeModel, d.effort, d.extractionModel, d.claudeExtractionModel, d.extractionEffort], ["gpt-6-luna", "haiku", "medium", "gpt-6-luna", "haiku", "medium"]);
-  assert.deepEqual([d.reminderHours, d.maxReminders, d.perBotDaily, d.globalDaily, d.reviewWhileBusy, d.conversationHours], [12, 0, 4, 20, true, 72]);
-  assert.equal(ledger.settings().looseThreads, true);
-  assert.equal(ledger.settings().triage, false);
-  assert.equal("quietHours" in ledger.settings(), false);
-  ledger.configure({ enabled: true, coverage: "selected", bots: { pilot: { enabled: true } } });
-  assert.equal(ledger.botSettings("pilot").enabled, true);
-  assert.equal(ledger.botSettings("other").enabled, false);
-  ledger.configure({ enabled: false });
+  const d = readSettings(store);
+  assert.equal(d.enabled, false);
+  assert.deepEqual([d.model, d.claudeModel, d.effort, d.speakWithBotModel], ["gpt-6-luna", "haiku", "medium", true]);
+  assert.deepEqual([d.activeMinutes, d.idleMinutes, d.nightMinutes, d.quietStart, d.quietEnd, d.timeZone], [30, 60, 180, "21:00", "08:00", "America/Toronto"]);
+  // A version 2 review-system record: on/off, coverage, switches and priorities survive; nothing else.
+  store.meta("initiative-settings", { version: 2, enabled: true, coverage: "selected", priorities: "Clients first", revision: 7, baselineMinutes: 360, looseThreads: true,
+    perBotDaily: 9, bots: { pilot: { enabled: true, baselineMinutes: 60, priorities: "Acme" } } });
+  const s = readSettings(store);
+  assert.deepEqual([s.enabled, s.coverage, s.priorities, s.revision, s.perBotDaily], [true, "selected", "Clients first", 7, 4]);
+  assert.equal(s.messagesEnabled, false, "upgrading starts with messages paused: a test run");
+  assert.equal(d.messagesEnabled, true);
+  assert.deepEqual(s.bots, { pilot: { enabled: true, priorities: "Acme" } });
+  assert.equal("baselineMinutes" in s || "looseThreads" in s, false);
+  assert.deepEqual(upgradeSettings({ version: 3, enabled: true }), { version: 3, enabled: true });
+  configureSettings(store, { quietStart: "22:30", activeMinutes: 20 }, 7);
+  assert.equal(readSettings(store).revision, 8);
+  assert.throws(() => configureSettings(store, { quietStart: "late" }), /21:00/);
+  assert.throws(() => configureSettings(store, { looseThreads: true }), /Unknown/);
+  assert.throws(() => configureSettings(store, { enabled: false }, 1), /changed elsewhere/);
+  configureSettings(store, { enabled: false });
   const calls = [];
   const coordinator = new InitiativeCoordinator({ store, bots: () => [{ id: "b", threadId: "t" }], executor: new Proxy({}, { get: (_, k) => (...a) => { calls.push(k); return { idle: true }; } }) });
   await coordinator.tick();
   assert.deepEqual(calls.filter(k => k !== "placement"), []);
 });
 
-test("Codex: idle-only admission, tool-free ephemeral jobs, and delivery by projection without any native write", async t => {
-  const { store, codex, runtime, coordinator, drive } = await setup(t, { reply: kind => kind === "extract" ? NO_MENTIONS : review() });
-  coordinator.ledger.configure({ reviewWhileBusy: false });
-  runtime.saveBot(store.bot("atlas"), { activeTurnId: "turn-live", status: "running" });
-  await drive(1);
-  assert.equal(jobStarts(codex).length, 0, "with reviewWhileBusy off, a busy bot is not admitted");
-  assert.equal(store.get("initiativeBot", "atlas").lastSkip, "not-idle");
-  runtime.saveBot(store.bot("atlas"), { activeTurnId: null, status: "idle" });
-  coordinator.nextScanAt = 0;
+test("a bot thinks privately on a light model, keeps a journal and loops, and stays quiet when nothing is worth saying", async t => {
+  const { store, codex, coordinator, clock, drive } = await setup(t);
   const eventsBefore = store.cursor();
-  await drive(6);
-  assert.deepEqual(kinds(store), ["extract:accepted", "review:accepted"]);
-  const [extract, reviewJob] = jobStarts(codex);
-  for (const job of [extract, reviewJob]) {
-    assert.equal(job.params.ephemeral, true);
-    assert.equal(job.params.sandbox, "read-only");
-    assert.equal(job.params.approvalPolicy, "never");
-    assert.equal(job.params.config["features.multi_agent"], false);
-    assert.equal("dynamicTools" in job.params, false);
-    for (const server of ["codex_manager", "bot_desktop", "linux_computer_use", "bot_desktop_linus"]) assert.equal(job.params.config[`mcp_servers.${server}`].enabled, false);
-    assert.notEqual(job.params.cwd, store.bot("atlas").cwd, "jobs run outside the bot workspace");
-  }
-  assert.equal(extract.params.model, "gpt-6-luna", "mention capture uses the small model");
-  assert.equal(reviewJob.params.model, "gpt-6-luna", "reviews run on the pinned review model, not the bot's own");
-  assert.equal(codex.calls.filter(c => c.method === "thread/fork").length, 0, "the main conversation is never forked");
-  const turns = codex.calls.filter(c => c.method === "turn/start" && c.params.threadId.startsWith("job-"));
-  assert.deepEqual(turns.map(c => c.params.sandboxPolicy), [{ type: "readOnly" }, { type: "readOnly" }]);
-  assert.ok(turns.every(c => c.params.outputSchema));
-  assert.match(turns[1].params.input[0].text, /We should call Acme/, "the packet carries recent conversation");
-  // Job events never reach chat, unread or notifications.
-  assert.equal(store.replay(eventsBefore).filter(e => JSON.stringify(e).includes("job-")).length, 0);
-  const notices = store.list("notice");
-  assert.ok(notices.length > 0 && notices.every(n => n.title === "Atlas"), "the only notice is the delivered proposal, titled with the bot's name");
-  assert.ok(notices.every(n => !/has a proposal for you/.test(n.body) && n.body.length > 10), "the push carries the message itself");
-  await drive(1);
-  const [publication] = store.list("initiativePublication");
-  assert.equal(publication.state, "published");
-  assert.equal(codex.calls.filter(c => c.method === "thread/inject_items").length, 0, "no native injection");
-  assert.equal(mainTurns(codex).length, 0, "publication starts no main model turn");
-  assert.ok(codex.calls.filter(c => c.method === "thread/unsubscribe").length >= 2, "job threads released");
-  assert.equal(store.list("notice").length, 1);
-  assert.match(store.bot("atlas").preview, /release notes/);
-  // Live event, then reconnect history.
-  assert.ok(store.replay(eventsBefore).some(e => JSON.stringify(e).includes(`initiative:${publication.id}`)));
-  const view = await conversationViewPage(runtime, store.bot("atlas"), null);
-  assert.ok(view.entries.some(e => e.item?.id === `initiative:${publication.id}` || e.id?.includes(publication.id)));
-  assert.equal(store.list("initiativeReview").find(r => r.kind === "review").usage.totalTokens, 1200);
-  assert.ok(store.list("initiativeReview").find(r => r.kind === "review").packetTokens > 0);
+  await drive(3);
+  assert.deepEqual(kinds(store), ["think:accepted"]);
+  const [job] = jobStarts(codex);
+  assert.equal(job.params.ephemeral, true);
+  assert.equal(job.params.sandbox, "read-only");
+  assert.equal(job.params.approvalPolicy, "never");
+  assert.equal(job.params.model, "gpt-6-luna", "thinking uses the light model, not the bot's own");
+  for (const server of ["codex_manager", "bot_desktop", "linux_computer_use", "bot_desktop_linus"]) assert.equal(job.params.config[`mcp_servers.${server}`].enabled, false);
+  assert.notEqual(job.params.cwd, store.bot("atlas").cwd, "jobs run outside the bot workspace");
+  const [turn] = jobTurns(codex);
+  assert.equal(turn.params.sandboxPolicy.type, "readOnly");
+  const prompt = turn.params.input[0].text;
+  assert.match(prompt, /You are Atlas/);
+  assert.match(prompt, /We should call Acme/, "it reads its own recent conversation");
+  assert.match(prompt, /Your earlier thoughts[^\n]*\n\(none\)/, "no thoughts yet");
+  assert.match(prompt, /It is Thursday, Oct 15, 10:00 AM/, "it knows the local day and time");
+  assert.equal(mainTurns(codex).length, 0, "the main conversation is never touched");
+  assert.equal(codex.calls.filter(c => c.method === "thread/fork").length, 0);
+  assert.equal(store.replay(eventsBefore).filter(e => JSON.stringify(e).includes("job-")).length, 0, "job events never reach chat");
+  const [entry] = journal(store);
+  assert.equal(entry.thought, QUIET.thought);
+  assert.equal(entry.decision, "quiet");
+  assert.equal(store.list("initiativePublication").length, 0);
+  const state = coordinator.botState("atlas");
+  assert.deepEqual(state.loops.map(l => [l.title, l.status]), [["Acme renewal call", "open"]]);
+  // Ordinary rhythm: an hour, jittered (random 0 → 75%), since no conversation in the last 3 hours.
+  assert.equal(Date.parse(state.nextThinkAt) - clock.t, 45 * 6e4);
+  await drive(2);
+  assert.equal(jobStarts(codex).length, 1, "not due yet");
+  // The next thought builds on the last one, and keeps the loop's id.
+  const loopId = state.loops[0].id;
+  codex.reply = kind => kind === "think" ? { ...QUIET, thought: "Still quiet on Acme; I'll raise it after lunch if nothing moves.", loops: [{ id: loopId, title: "Acme renewal call", status: "open", note: "watch it" }], check_back_minutes: 120 } : null;
+  clock.t += 46 * 6e4;
+  await drive(3);
+  const second = jobTurns(codex).at(-1).params.input[0].text;
+  assert.match(second, /Your earlier thoughts[\s\S]*Acme renewal is on Friday; nothing scheduled yet/);
+  assert.match(second, new RegExp(`\\[${loopId}\\] Acme renewal call — open`));
+  assert.equal(coordinator.botState("atlas").loops.length, 1, "the same loop, updated");
+  assert.equal(Date.parse(coordinator.botState("atlas").nextThinkAt) - clock.t, 120 * 6e4, "it asked to think again in two hours");
+  assert.equal(store.list("initiativeReview").find(r => r.kind === "think").usage.totalTokens, 1200);
 });
 
-test("tool requests are refused and any tool item makes a job invalid", async t => {
-  const { store, codex, coordinator, drive } = await setup(t, { reply: kind => kind === "extract" ? NO_MENTIONS : null });
+test("deciding to speak: the bot's own model writes the message, delivered as its ordinary message with a push", async t => {
+  const { store, codex, runtime, coordinator, drive } = await setup(t, { reply: thinkReply(SPEAK) });
+  const eventsBefore = store.cursor();
+  await drive(4);
+  assert.deepEqual(kinds(store), ["think:accepted", "speak:accepted"]);
+  const [, speak] = jobStarts(codex);
+  assert.equal(speak.params.model, "gpt-6.1-sol", "the message is written with the bot's own model");
+  const speakPrompt = jobTurns(codex).at(-1).params.input[0].text;
+  assert.match(speakPrompt, /What you were just thinking\n.*worth a nudge/);
+  assert.match(speakPrompt, /rough draft\)\n.*no call booked yet/);
+  const [p] = store.list("initiativePublication");
+  assert.equal(p.state, "published");
+  assert.equal(p.text, SPOKEN.message);
+  assert.equal(p.draft, SPEAK.message);
+  // A projection only: no native write, no model turn.
+  assert.equal(codex.calls.filter(c => c.method === "thread/inject_items").length, 0);
+  assert.equal(mainTurns(codex).length, 0);
+  const notices = store.list("notice");
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].title, "Atlas");
+  assert.match(notices[0].body, /^Quick one: the Acme renewal is Friday/);
+  assert.match(store.bot("atlas").preview, /Acme renewal/);
+  assert.ok(store.replay(eventsBefore).some(e => JSON.stringify(e).includes(`initiative:${p.id}`)));
+  const view = await conversationViewPage(runtime, store.bot("atlas"), null);
+  assert.ok(view.entries.some(e => e.item?.id === `initiative:${p.id}`));
+  const [entry] = journal(store);
+  assert.deepEqual([entry.messageState, entry.message], ["delivered", SPOKEN.message]);
+  assert.equal(coordinator.botState("atlas").loops[0].status, "raised");
+  // The next thought sees what it said.
+  codex.reply = thinkReply(QUIET);
+  coordinator.saveBotState("atlas", { nextThinkAt: coordinator.at() });
+  await drive(3);
+  assert.match(jobTurns(codex).at(-1).params.input[0].text, /You said to Dawar: “Quick one: the Acme renewal/);
+  assert.match(jobTurns(codex).at(-1).params.input[0].text, /Messages you sent him on your own\n- .*Quick one/);
+});
+
+test("with the bot's own model off, the thought's message goes out as written; a failed rewrite falls back to it", async t => {
+  const { store, codex, coordinator, drive } = await setup(t, { reply: thinkReply(SPEAK, "not json") });
+  coordinator.ledger.configure({ speakWithBotModel: false });
+  await drive(3);
+  assert.deepEqual(kinds(store), ["think:accepted"]);
+  assert.equal(store.list("initiativePublication")[0].text, SPEAK.message);
+  // Rewrite on, but it fails: the draft is sent.
+  coordinator.ledger.configure({ speakWithBotModel: true });
+  coordinator.saveBotState("atlas", { nextThinkAt: coordinator.at() });
+  coordinator.store.meta("initiative-next-delivery-at", null);
+  await drive(4);
+  const second = store.list("initiativePublication").sort((a, b) => a.createdAt.localeCompare(b.createdAt)).at(-1);
+  assert.ok(kinds(store).includes("speak:invalid"));
+  assert.equal(second.text, SPEAK.message);
+  assert.ok(second.draftError);
+  assert.ok(jobStarts(codex).length >= 3);
+});
+
+test("quiet hours: a bot thinks overnight at a slower rhythm, and what it decides waits for the morning", async t => {
+  // 02:00 in Toronto.
+  const { store, coordinator, clock, drive } = await setup(t, { reply: thinkReply(SPEAK), at: "2026-10-16T06:00:00Z" });
+  await drive(4);
+  const [p] = store.list("initiativePublication");
+  assert.equal(p.state, "held");
+  assert.equal(p.reason, "quiet-hours");
+  assert.equal(store.list("notice").length, 0, "no push at night");
+  assert.equal(Date.parse(coordinator.botState("atlas").nextThinkAt) - clock.t, 135 * 6e4, "overnight rhythm: 3 hours, jittered");
+  assert.match(store.list("initiativeReview")[0].kind, /think/);
+  const s = coordinator.settings();
+  assert.equal(inQuietHours(clock.t, s), true);
+  assert.equal(localTime(quietEndsAt(clock.t, s), s.timeZone), "Friday, Oct 16, 8:00 AM");
+  // 08:00: it goes out (within the 12-hour window), without thinking again first.
+  coordinator.ledger.configure({ nightMinutes: 600 });
+  clock.t = Date.parse("2026-10-16T12:00:00Z");
+  await drive(1);
+  assert.equal(store.get("initiativePublication", p.id).state, "published");
+});
+
+test("Dawar writing first: a thought in progress is kept but not spoken, and a queued message is dropped", async t => {
+  const { store, codex, coordinator, clock, drive } = await setup(t, { reply: kind => kind === "think" ? null : SPOKEN });
+  await drive(2);
+  const running = store.list("privateReview").find(r => r.state === "running");
+  clock.t += 1000;
+  coordinator.observeUserMessage("atlas", owner("u-late", "actually, I booked Acme already"));
+  codex.finishJob(running.jobThreadId, running.turnId, JSON.stringify(SPEAK));
+  await settle();
+  await drive(1);
+  const [entry] = journal(store);
+  assert.equal(entry.thought, SPEAK.thought, "the thought is kept");
+  assert.deepEqual([entry.messageState, entry.reason], ["withheld", "owner-spoke"]);
+  assert.equal(store.list("initiativePublication").length, 0);
+  assert.equal(Date.parse(coordinator.botState("atlas").nextThinkAt) - clock.t, 5 * 6e4, "it thinks again soon, with his message in view");
+  // A message already queued is dropped when he writes before it goes out.
+  coordinator.store.meta("initiative-next-delivery-at", new Date(clock.t + 36e5).toISOString());
+  codex.reply = thinkReply(SPEAK);
+  clock.t += 6 * 6e4;
+  await drive(4);
+  const [queued] = store.list("initiativePublication");
+  assert.equal(queued.state, "held");
+  assert.equal(queued.reason, "spacing");
+  clock.t += 1000;
+  coordinator.observeUserMessage("atlas", owner("u-2", "and one more thing"));
+  await drive(1);
+  assert.deepEqual([store.get("initiativePublication", queued.id).state, store.get("initiativePublication", queued.id).reason], ["abandoned", "owner-spoke"]);
+  assert.equal(journal(store).at(-1).messageState, "dropped");
+  assert.equal(store.list("notice").length, 0);
+  // Schedules, peers and notices are not Dawar writing.
+  const before = coordinator.botState("atlas").lastOwnerMessageAt;
+  coordinator.observeUserMessage("atlas", { type: "userMessage", id: "s", clientId: "schedule:daily", content: [] });
+  assert.equal(coordinator.botState("atlas").lastOwnerMessageAt, before);
+});
+
+test("pacing: a random gap between any two messages, per-bot and total daily caps, one delivery per tick", async t => {
+  const { store, coordinator, clock, drive } = await setup(t, { bots: ["atlas", "bea", "cy"], reply: thinkReply(SPEAK) });
+  coordinator.ledger.configure({ spacingMinMinutes: 10, spacingMaxMinutes: 10, perBotDaily: 1, globalDaily: 2, concurrency: 3 });
+  await drive(5);
+  const published = () => store.list("initiativePublication").filter(p => p.state === "published");
+  assert.equal(published().length, 1);
+  assert.ok(store.list("initiativePublication").filter(p => p.state === "held").every(p => p.reason === "spacing"));
+  clock.t += 9 * 6e4; await drive(1);
+  assert.equal(published().length, 1, "still inside the gap");
+  clock.t += 2 * 6e4; await drive(1);
+  assert.equal(published().length, 2);
+  clock.t += 11 * 6e4; await drive(1);
+  assert.equal(published().length, 2, "total daily cap");
+  assert.equal(store.list("initiativePublication").find(p => p.state === "held").reason, "daily-limit");
+  assert.equal(coordinator.status("atlas").metrics.messagesToday, 2);
+  // The thought knows how many it can still send.
+  const sender = published()[0].botId;
+  assert.equal(coordinator.brief(store.bot(sender), coordinator.settings()).remaining, 0);
+});
+
+test("a busy bot thinks privately; its message waits until it is free", async t => {
+  const { store, codex, runtime, coordinator, drive } = await setup(t, { reply: thinkReply(SPEAK) });
+  runtime.saveBot(store.bot("atlas"), { activeTurnId: "turn-live", status: "running" });
+  await drive(5);
+  assert.deepEqual(kinds(store), ["think:accepted", "speak:accepted"]);
+  assert.equal(mainTurns(codex).length, 0);
+  const [p] = store.list("initiativePublication");
+  assert.equal(p.state, "held");
+  runtime.saveBot(store.bot("atlas"), { activeTurnId: null, status: "idle" });
+  await drive(2);
+  assert.equal(store.get("initiativePublication", p.id).state, "published");
+  // With thinking-while-busy off, a busy bot waits and the skip is recorded.
+  coordinator.ledger.configure({ reviewWhileBusy: false });
+  runtime.saveBot(store.bot("atlas"), { activeTurnId: "turn-live", status: "running" });
+  coordinator.saveBotState("atlas", { nextThinkAt: coordinator.at() });
+  const starts = jobStarts(codex).length;
+  await drive(1);
+  assert.equal(jobStarts(codex).length, starts);
+  assert.equal(coordinator.botState("atlas").lastSkip, "not-idle");
+});
+
+test("tool requests are refused and any tool item makes a thought invalid", async t => {
+  const { store, codex, coordinator, drive } = await setup(t, { reply: () => null });
   await drive(2);
   const job = store.list("privateReview").find(r => r.state === "running");
   assert.ok(job?.jobThreadId);
@@ -221,274 +359,120 @@ test("tool requests are refused and any tool item makes a job invalid", async t 
   assert.equal(store.get("privateReview", job.id).state, "invalid");
   await coordinator.tick();
   assert.equal(store.get("initiativeReview", job.id).state, "invalid");
-  assert.equal(store.get("initiativeBot", "atlas").failures, 1);
-  assert.equal(store.list("initiativePublication").length, 0);
+  assert.equal(coordinator.botState("atlas").failures, 1);
+  assert.ok(Date.parse(coordinator.botState("atlas").backoffUntil) > coordinator.clock());
+  assert.equal(journal(store).length, 0);
 });
 
-test("user activity cancels a review; stale results are rejected without a message", async t => {
-  const { store, codex, coordinator, clock, drive } = await setup(t, { reply: kind => kind === "extract" ? NO_MENTIONS : null });
-  await drive(2);
-  const userTurn = { id: "turn-user", status: "inProgress", startedAt: sec("2026-10-15T14:01:00Z"), items: [] };
-  codex.threads.get("thread-main").turns.push(userTurn);
-  codex.emit("notification", { method: "turn/started", params: { threadId: "thread-main", turn: userTurn } });
-  await settle();
-  assert.equal(mainTurns(codex).length, 0, "the main conversation is not touched");
-  assert.equal(store.list("privateReview").find(r => r.kind === "review").state, "cancelled");
-  await coordinator.tick();
-  assert.equal(store.list("initiativeReview").find(r => r.kind === "review").state, "cancelled");
-  Object.assign(userTurn, { status: "completed" });
-  codex.emit("notification", { method: "turn/completed", params: { threadId: "thread-main", turn: userTurn } });
-  await settle();
-  clock.t += 26 * 6e4;
-  coordinator.nextScanAt = 0;
-  await drive(2);
-  const running = store.list("privateReview").find(r => r.state === "running" && r.kind === "review");
-  assert.ok(running);
-  // The bot's own work does not make a review stale; Dawar writing to it does.
-  codex.threads.get("thread-main").turns.push({ id: "turn-2", status: "completed", items: [] });
-  clock.t += 1000;
-  coordinator.observeUserMessage("atlas", { type: "userMessage", id: "u-late", clientId: "owner-late", content: [{ type: "text", text: "actually, one more thing" }] });
-  codex.finishJob(running.jobThreadId, running.turnId, output());
-  await settle();
-  await coordinator.tick();
-  const rejected = store.list("initiativeReview").find(r => r.state === "rejected");
-  assert.equal(rejected.reason, "owner-spoke");
-  assert.equal(store.list("initiativePublication").length, 0);
-  assert.equal(store.list("initiativeItem").length, 0, "stale result changes no ledger state");
+test("thought validation repairs small slips; loops merge by id and closed ones are kept a week", () => {
+  const id = () => "loop-new";
+  const v = validateThought(JSON.stringify({ thought: "  hmm  ", loops: [{ id: "loop-x", title: "Keep", status: "open", note: "" }, { id: "made-up", title: "New", status: "weird", note: "" }],
+    decision: "speak", message: "", check_back_minutes: 0 }), { newId: id, knownLoops: [{ id: "loop-x" }] });
+  assert.deepEqual([v.thought, v.decision, v.message, v.checkBackMinutes], ["hmm", "quiet", null, null], "speak without a message becomes quiet");
+  assert.deepEqual(v.loops.map(l => [l.id, l.status]), [["loop-x", "open"], ["loop-new", "open"]]);
+  const m = validateThought({ thought: "say it", loops: [], decision: "speak", message: "Hi Dawar.\n\n_Ref initiative-123: reply yes_", check_back_minutes: 90 });
+  assert.equal(m.message, "Hi Dawar.");
+  assert.equal(m.checkBackMinutes, 90);
+  assert.throws(() => validateThought("{\"thought\":\"\"}"), /empty/);
+  const at = "2026-10-15T14:00:00.000Z";
+  const merged = mergeLoops([{ id: "a", title: "A", status: "open", createdAt: "2026-10-01T00:00:00Z" }, { id: "b", title: "B", status: "open" }],
+    [{ id: "a", title: "A", status: "raised", note: "asked" }, { id: "c", title: "C", status: "done", note: "" }], at);
+  assert.deepEqual(merged.map(l => [l.id, l.status]), [["a", "raised"], ["b", "open"], ["c", "done"]].sort((x, y) => (x[1] === "done") - (y[1] === "done")));
+  assert.equal(merged.find(l => l.id === "a").raisedAt, at);
+  assert.equal(merged.find(l => l.id === "a").createdAt, "2026-10-01T00:00:00Z");
+  const later = mergeLoops(merged, [], "2026-10-23T14:00:00.000Z");
+  assert.equal(later.some(l => l.id === "c"), false, "a closed loop is forgotten after a week");
+  const s = { ...readSettings({ meta: () => null }) };
+  assert.equal(nextThinkDelay(s, { now: Date.parse(at), lastConversationAt: "2026-10-15T13:30:00Z", random: () => 0.5 }), 30 * 6e4, "right after a conversation");
+  assert.equal(nextThinkDelay(s, { now: Date.parse(at), checkBackMinutes: 5 }), 15 * 6e4, "never sooner than 15 minutes");
+  assert.equal(nextThinkDelay(s, { now: Date.parse(at), checkBackMinutes: 5000 }), 24 * 36e5, "never later than a day");
 });
 
-test("mention capture reads only Dawar's own new messages, incrementally, with source references", async t => {
-  const { store, codex, runtime, coordinator, drive } = await setup(t, { reply: (kind, params) => kind === "extract" ? (params.input[0].text.includes("[u1]") ? ACME : NO_MENTIONS) : NONE });
-  const main = codex.threads.get("thread-main");
-  main.turns[0].items.push(
-    { type: "userMessage", id: "p1", clientId: "peer:x", content: [{ type: "text", text: "Peer: let's buy a boat", text_elements: [] }] },
-    { type: "userMessage", id: "s1", clientId: "schedule:daily", content: [{ type: "text", text: "Daily check: think about the Globex merger", text_elements: [] }] },
-    owner("b1", '[Verified DawarTodo source {"kind":"bot","id":"bea"}] I am thinking about a newsletter'));
-  await drive(4);
-  const extraction = store.list("privateReview").find(r => r.kind === "extract");
-  assert.deepEqual(extraction.batch.messages.map(m => m.id), ["u1"], "peer, schedule and bot-sourced text are never sources");
-  const prompt = codex.calls.find(c => c.method === "turn/start" && c.params.outputSchema?.properties?.mentions).params.input[0].text;
-  assert.doesNotMatch(prompt, /boat|Globex|newsletter/);
-  const [item] = store.list("initiativeItem");
-  assert.equal(item.kind, "loose-thread");
-  assert.equal(item.category, "client");
-  assert.deepEqual(item.mentions.map(m => [m.botId, m.threadId, m.turnId, m.itemId, m.quote]),
-    [["atlas", "thread-main", "turn-1", "u1", "call Acme about their renewal"]]);
-  assert.equal(item.mentions[0].at, "2026-10-13T15:00:00.000Z");
-  assert.deepEqual(item.sources, ["mention:atlas:turn-1:u1"]);
-  const cursor = store.get("initiativeBot", "atlas").mentionCursor;
-  assert.equal(cursor.turnId, "turn-1");
-  // Only the new message is read next time.
-  main.turns.push({ id: "turn-2", status: "completed", startedAt: sec("2026-10-15T14:05:00Z"), items: [owner("u2", "Remind me to look at hiring a designer"), answer("a2", "Sure.")] });
-  runtime.saveBot(store.bot("atlas"), { updatedAt: "2026-10-15T14:06:00.000Z" });
-  coordinator.nextScanAt = 0;
+test("the bot's tool reads its own mind and notes what Dawar settled; Think now and status", async t => {
+  const { store, coordinator, clock, drive } = await setup(t);
   await drive(3);
-  const second = store.list("privateReview").filter(r => r.kind === "extract").sort((a, b) => a.startedAt.localeCompare(b.startedAt)).at(-1);
-  assert.deepEqual(second.batch.messages.map(m => m.id), ["u2"]);
-  assert.equal(ownerAuthored(runtime, store.bot("atlas"), main.turns[0].items[1]), false);
-  // Batches are bounded; the remainder follows from the cursor.
-  const batch = await readOwnerMessages(runtime, { ...store.bot("atlas") }, null, { limit: 1, lookbackMs: 7 * 864e5, clock: () => Date.parse("2026-10-15T15:00:00Z") });
-  assert.equal(batch.messages.length, 1);
-  assert.equal(batch.more, true);
-  const rest = await readOwnerMessages(runtime, { ...store.bot("atlas") }, batch.cursor, { limit: 1, clock: () => Date.parse("2026-10-15T15:00:00Z") });
-  assert.deepEqual(rest.messages.map(m => m.id), ["u2"]);
-  // Activity with nothing new from Dawar advances the cursor without a model call.
-  const luna = () => jobStarts(codex).filter(c => c.params.model === "gpt-6-luna").length, before = luna();
-  runtime.saveBot(store.bot("atlas"), { updatedAt: "2026-10-15T14:30:00.000Z" });
-  coordinator.nextScanAt = 0;
+  const [loop] = coordinator.botState("atlas").loops;
+  const read = coordinator.tool("atlas", { operation: "read" });
+  assert.equal(read.thoughts[0].thought, QUIET.thought);
+  assert.equal(read.loops[0].id, loop.id);
+  clock.t += 6e4;
+  coordinator.tool("atlas", { operation: "note", loopId: loop.id, status: "done", note: "Dawar booked the Acme call himself." });
+  assert.equal(coordinator.botState("atlas").loops[0].status, "done");
+  assert.equal(journal(store).at(-1).kind, "note");
+  assert.throws(() => coordinator.tool("atlas", { operation: "note", loopId: "nope", status: "done" }), /not in your mind/);
+  assert.throws(() => coordinator.tool("atlas", { operation: "note" }), /Write a note/);
+  const status = coordinator.thinkNow("atlas");
+  assert.equal(Date.parse(coordinator.botState("atlas").nextThinkAt), clock.t);
+  assert.equal(status.bot.journal.length, 2);
+  assert.equal(status.bot.journal[0].kind, "note", "newest first");
+  assert.equal(status.bots[0].lastThought, QUIET.thought);
+  assert.equal(status.metrics.thoughtsToday, 1);
+});
+
+test("messages paused: bots keep thinking and journal what they would have said; nothing is sent", async t => {
+  const { store, codex, coordinator, drive } = await setup(t, { reply: thinkReply(SPEAK) });
+  coordinator.ledger.configure({ messagesEnabled: false });
+  await drive(4);
+  assert.deepEqual(kinds(store), ["think:accepted"], "no rewrite while paused");
+  assert.match(jobTurns(codex)[0].params.input[0].text, /Messages are paused right now/);
+  const [entry] = journal(store);
+  assert.deepEqual([entry.decision, entry.messageState, entry.reason, entry.message], ["speak", "withheld", "paused", SPEAK.message]);
+  assert.equal(store.list("initiativePublication").length, 0);
+  assert.equal(store.list("notice").length, 0);
+});
+
+test("messages queued by the earlier review system are retired, never sent", async t => {
+  const { store, drive } = await setup(t);
+  store.put("initiativePublication", { id: "initiative-publication:legacy-1", botId: "atlas", itemId: "initiative-x", text: "Old proposal", state: "pending", createdAt: "2026-10-15T13:59:00.000Z" });
   await drive(2);
-  assert.equal(luna(), before);
-  assert.ok(store.list("initiativeReview").some(r => r.kind === "extract" && r.state === "accepted" && !r.usage), "empty batch costs no tokens");
+  assert.deepEqual([store.get("initiativePublication", "initiative-publication:legacy-1").state, store.get("initiativePublication", "initiative-publication:legacy-1").reason],
+    ["abandoned", "replaced-by-inner-monologue"]);
+  assert.equal(store.list("notice").length, 0);
 });
 
-test("extraction quotes must be Dawar's own words from the cited message", () => {
-  const batch = { messages: [{ id: "m1", turnId: "t1", threadId: "th", at: "2026-10-15T10:00:00.000Z", text: "Let's pitch Initech on the analytics add-on next month." }], actions: [] };
-  const v = validateExtraction({ mentions: [
-    { ...ACME.mentions[0], message_id: "m1", quote: "pitch Initech on the analytics add-on", key: "initech-pitch", entity: "Initech" },
-    { ...ACME.mentions[0], message_id: "m1", quote: "Dawar wants a yacht", key: "fabricated" },
-    { ...ACME.mentions[0], message_id: "not-in-batch", key: "foreign" }], resolutions: [{ item_id: "unknown", kind: "todo", evidence: "x", message_id: null }] }, batch);
-  assert.equal(v.mentions.length, 2, "a mention citing a message outside the batch is dropped");
-  assert.equal(v.mentions[0].quote, "pitch Initech on the analytics add-on");
-  assert.equal(v.mentions[1].quote, batch.messages[0].text, "an invented quote is replaced by the message's own words");
-  assert.equal(v.resolutions.length, 0, "only tracked items can be resolved");
-});
-
-test("the same client mentioned to two bots is one loose thread with both sources; a better-fitting bot owns it", async t => {
-  const dir = await mkdtemp(join(tmpdir(), "initiative-dedup-"));
-  const store = new Store(join(dir, "s.sqlite"));
-  t.after(async () => { store.close(); await rm(dir, { recursive: true, force: true }); });
-  const now = Date.parse("2026-10-15T14:00:00Z");
-  const ledger = new InitiativeLedger(store, { clock: () => now });
-  const mention = (botId, id, at, extra = {}) => ({ messageId: id, turnId: `t-${id}`, threadId: `thread-${botId}`, messageAt: at, quote: "Acme renewal", itemId: null,
-    key: "client-acme-renewal", title: "Acme renewal follow-up", category: "client", entity: "Acme", importance: "medium", timeSensitive: false, dueAt: null, summary: "", betterBotId: null, ...extra });
-  ledger.applyMentions("atlas", { mentions: [mention("atlas", "m1", "2026-10-14T09:00:00.000Z")], resolutions: [] }, { responsible: () => "connie" });
-  // Different key, same entity and a similar title: still the same thread.
-  ledger.applyMentions("bea", { mentions: [mention("bea", "m2", "2026-10-15T09:00:00.000Z", { key: "acme-contract", title: "Follow up Acme renewal", importance: "high" })], resolutions: [] });
-  const items = ledger.items();
-  assert.equal(items.length, 1);
-  const [item] = items;
-  assert.equal(item.responsibleBotId, "connie", "the client goes to the communications bot");
-  assert.deepEqual(item.contributors.map(c => c.botId), ["atlas", "bea"]);
-  assert.deepEqual(item.mentions.map(m => m.botId), ["atlas", "bea"]);
-  assert.equal(item.importance, "high");
-  assert.equal(item.lastTouchedAt, "2026-10-15T09:00:00.000Z");
-  assert.ok(item.aliases.includes("acme-contract"));
-  // The same message again (re-extraction) adds nothing.
-  ledger.applyMentions("bea", { mentions: [mention("bea", "m2", "2026-10-15T09:00:00.000Z")], resolutions: [] });
-  assert.equal(ledger.item(item.id).mentions.length, 2);
-  // A different Acme topic stays separate.
-  ledger.applyMentions("atlas", { mentions: [mention("atlas", "m3", "2026-10-15T10:00:00.000Z", { key: "acme-invoice-dispute", title: "Dispute the March invoice" })], resolutions: [] });
-  assert.equal(ledger.items().length, 2);
-});
-
-test("resolution needs conclusive evidence and never overrides a newer owner decision", async t => {
-  const dir = await mkdtemp(join(tmpdir(), "initiative-resolve-"));
-  const store = new Store(join(dir, "s.sqlite"));
-  t.after(async () => { store.close(); await rm(dir, { recursive: true, force: true }); });
-  let now = Date.parse("2026-10-15T14:00:00Z");
-  const ledger = new InitiativeLedger(store, { clock: () => now });
-  const add = (key, at = "2026-10-15T09:00:00.000Z") => ledger.applyMentions("atlas", { mentions: [{ messageId: key, turnId: "t", threadId: "th", messageAt: at, quote: key, itemId: null, key, title: key,
-    category: "idea", entity: null, importance: "medium", timeSensitive: false, dueAt: null, summary: "", betterBotId: null }], resolutions: [] }).items[0];
-  const a = add("podcast-idea"), b = add("hire-designer"), c = add("pricing-page");
-  ledger.applyMentions("atlas", { mentions: [], resolutions: [{ itemId: a.id, kind: "todo", evidence: "bots_draft_task_request: Podcast pilot", at: "2026-10-15T12:00:00.000Z", source: "bot-actions" }] });
-  assert.equal(ledger.item(a.id).status, "resolved");
-  assert.deepEqual(ledger.item(a.id).resolution.kind, "todo");
-  // Snoozed at 13:00; an extraction of an 11:00 message cannot resolve it.
-  ledger.recordOutcome(b.id, "snoozed", { until: "2026-10-20T00:00:00.000Z" });
-  const ignored = ledger.applyMentions("atlas", { mentions: [], resolutions: [{ itemId: b.id, kind: "owner-done", evidence: "said done", at: "2026-10-15T11:00:00.000Z" }] }).ignored;
-  assert.deepEqual(ignored, [{ itemId: b.id, reason: "newer-owner-decision" }]);
-  assert.equal(ledger.item(b.id).status, "snoozed");
-  // A review concludes from the conversation; the owner can resolve from Settings.
-  const capture = { ledgerVersion: ledger.version(), startedAt: new Date(now).toISOString(), reviewId: "r1" };
-  ledger.applyReview("atlas", validateReviewResult(JSON.stringify({ ...NONE, ledger_updates: [{ item_id: c.id, key: c.key, title: c.title, kind: "loose-thread", status: "resolved", note: "Pricing page shipped in turn-9", sources: ["turn-9"], next_review_hours: null }] })), capture);
-  assert.equal(ledger.item(c.id).resolution.kind, "concluded");
-  // A review can never invent a loose thread.
-  const invented = ledger.applyReview("atlas", validateReviewResult(JSON.stringify({ ...NONE, ledger_updates: [{ item_id: null, key: "made-up", title: "Made up", kind: "loose-thread", status: "candidate", note: null, sources: [], next_review_hours: null }] })), capture);
-  assert.equal(invented.items.length, 0);
-  // Dawar raising a resolved thread again reopens it.
-  now += 36e5;
-  ledger.applyMentions("atlas", { mentions: [{ messageId: "again", turnId: "t2", threadId: "th", messageAt: new Date(now).toISOString(), quote: "podcast again", itemId: a.id, key: "podcast-idea", title: "podcast-idea",
-    category: "idea", entity: null, importance: "medium", timeSensitive: false, dueAt: null, summary: "", betterBotId: null }], resolutions: [] });
-  assert.equal(ledger.item(a.id).status, "candidate");
-});
-
-test("resurfacing timing scales with category and importance; due threads lead and keep a reserved slot", async t => {
-  const base = { firstMentionedAt: "2026-10-15T08:00:00.000Z", lastTouchedAt: "2026-10-15T08:00:00.000Z", timeSensitive: false };
-  const at = item => (Date.parse(resurfaceAt({ ...base, ...item })) - Date.parse(base.lastTouchedAt)) / 36e5;
-  assert.equal(at({ category: "client", importance: "high" }), 2, "a client can come back within hours");
-  assert.equal(at({ category: "client", importance: "medium" }), 6);
-  assert.equal(at({ category: "idea", importance: "medium" }), 36, "an idea after a day or two");
-  assert.equal(at({ category: "idea", importance: "low", timeSensitive: true }), 2);
-  assert.equal(at({ category: "idea", importance: "low", dueAt: "2026-10-15T16:00:00.000Z" }), 2, "comes back before a named deadline");
-  const t0 = Date.parse("2026-10-16T08:00:00Z");
-  assert.ok(looseThreadPriority({ category: "client", importance: "high", resurfaceAt: "2026-10-15T10:00:00.000Z" }, t0) >
-    looseThreadPriority({ category: "idea", importance: "high", resurfaceAt: "2026-10-15T10:00:00.000Z" }, t0));
-
-  const dir = await mkdtemp(join(tmpdir(), "initiative-timing-"));
-  const store = new Store(join(dir, "s.sqlite"));
-  t.after(async () => { store.close(); await rm(dir, { recursive: true, force: true }); });
-  let now = Date.parse("2026-10-15T09:00:00Z");
-  const ledger = new InitiativeLedger(store, { clock: () => now, random: () => 0 });
-  const [thread] = ledger.applyMentions("atlas", { mentions: [{ messageId: "m", turnId: "t", threadId: "th", messageAt: "2026-10-15T08:00:00.000Z", quote: "call Acme", itemId: null,
-    key: "acme", title: "Call Acme", category: "client", entity: "Acme", importance: "medium", timeSensitive: false, dueAt: null, summary: "", betterBotId: null }], resolutions: [] }).items;
-  assert.equal(ledger.threadDue(ledger.item(thread.id)), false);
-  now = Date.parse("2026-10-15T14:30:00Z");
-  assert.equal(ledger.threadDue(ledger.item(thread.id)), true);
-  // Global limit 5 with one slot reserved: other kinds stop at 4 while a loose thread is due.
-  ledger.configure({ spacingMinMinutes: 0, spacingMaxMinutes: 0, globalDaily: 5, perBotDaily: 2 });
-  const capture = { ledgerVersion: 0, startedAt: new Date(now).toISOString(), reviewId: "r" };
-  for (const bot of ["a", "b", "c", "d"]) {
-    const id = ledger.applyReview(bot, validateReviewResult(output({ contribution: { key: `${bot}-x`, title: `${bot}-x` } })), capture).contribution.itemId;
-    ledger.markPublished({ id: `p-${bot}`, botId: bot, itemId: id, createdAt: new Date(now).toISOString() });
-  }
-  const other = ledger.applyReview("e", validateReviewResult(output({ contribution: { key: "e-x", title: "e-x" } })), capture).contribution.itemId;
-  assert.equal(ledger.deliveryBlock("e", other), "reserved-for-loose-threads");
-  assert.equal(ledger.deliveryBlock("atlas", thread.id), null);
-  ledger.recordOutcome(thread.id, "snoozed", { until: "2026-10-15T15:00:00.000Z" });
-  assert.equal(ledger.deliveryBlock("e", other), null, "no reserve while nothing is due");
-  now = Date.parse("2026-10-15T15:01:00Z");
-  ledger.wakeSnoozed();
-  assert.equal(ledger.threadDue(ledger.item(thread.id)), true, "a woken snooze is due again");
-});
-
-test("a due loose thread triggers a review whose proposal quotes the original mention and offers a concrete action", async t => {
-  let itemId = null;
-  const { store, codex, coordinator, clock, drive } = await setup(t, { bots: ["atlas", "connie"], reply: (kind, params) => {
-    if (kind === "extract") return params.input[0].text.includes("(bot id atlas)") && params.input[0].text.includes("[u1]") ? ACME : NO_MENTIONS;
-    itemId = store.list("initiativeItem")[0]?.id;
-    return itemId && params.input[0].text.includes("call Acme about their renewal") ? threadProposal(itemId) : NONE;
-  } });
-  await drive(2);
-  const [item] = store.list("initiativeItem");
-  assert.equal(item.kind, "loose-thread");
-  coordinator.scan(coordinator.ledger.settings());
-  assert.equal(coordinator.backlog.find(e => e.botId === "atlas" && e.kind === "review").trigger, "loose-thread");
-  assert.ok(coordinator.backlog.findIndex(e => e.botId === "atlas" && e.kind === "review") < coordinator.backlog.findIndex(e => e.botId === "connie" && e.kind === "review"),
-    "the bot with a due loose thread is reviewed first");
-  await drive(6);
-  // Mentioned on Tuesday as a high-importance client: overdue by Thursday, so the first review raises it.
-  const packet = codex.calls.filter(c => c.method === "turn/start" && c.params.outputSchema?.properties?.decision && c.params.input[0].text.includes("You are Atlas")).at(-1).params.input[0].text;
-  assert.match(packet, /What did Dawar mention in the last hours or days/);
-  // Merit, ownership and honesty are prompt-level behaviour; limits stay the hard cap.
-  assert.match(packet, /competing, on merit, for Dawar's limited attention/);
-  assert.match(packet, /most valuable, specific, evidence-backed proposal/);
-  assert.match(packet, /taking on more ownership or responsibilities/);
-  assert.match(packet, /no exaggeration, no padding, and no undermining other bots\. Cite the source of every claim/);
-  assert.match(packet, /"quote": "call Acme about their renewal"/);
-  await drive(2);
-  const publication = store.list("initiativePublication").find(p => p.itemId === item.id);
+test("next-turn context: the bot hears about what it said on its own exactly once", async t => {
+  const { store, codex, runtime, drive } = await setup(t, { reply: thinkReply(SPEAK) });
+  await drive(4);
+  const [publication] = store.list("initiativePublication");
   assert.equal(publication.state, "published");
-  assert.equal(publication.botId, "atlas");
-  assert.match(publication.text, /^On Tuesday you mentioned: “call Acme about their renewal”/);
-  assert.match(publication.text, /\*\*Proposed next step \(create a todo\):\*\* Create a todo/);
-  assert.match(publication.text, /“done”/);
-  assert.equal(store.get("initiativeItem", item.id).status, "published");
-  // Mentioned to Connie, raised by Atlas.
-  const text = publicationText({ kind: "loose-thread", message: "Worth a call today.", proposedAction: { type: "draft-message", detail: "Draft an email to Acme." } }, item.id,
-    { item: { ...item, mentions: [{ ...item.mentions[0], botId: "connie" }] }, publisherBotId: "atlas", names: { connie: "Connie" }, clock: clock.t });
-  assert.match(text, /^On Tuesday you mentioned to Connie: “call Acme about their renewal”\n\nWorth a call today\.\n\n\*\*Proposed next step \(draft a message\):\*\*/);
-  assert.equal(mentionWhen("2026-10-15T13:00:00Z", clock.t), "Earlier today");
-  assert.equal(mentionWhen("2026-10-14T13:00:00Z", Date.parse("2026-10-15T14:00:00Z")), "Yesterday");
-  assert.equal(mentionWhen("2026-10-01T13:00:00Z", Date.parse("2026-10-15T14:00:00Z")), "On Oct 1");
-  // An incomplete loose-thread proposal is repaired, not discarded: the
-  // required first step becomes the action, the only open thread the item.
-  const repaired = validateReviewResult(threadProposal(item.id, { proposed_action: null }));
-  assert.equal(repaired.contribution.proposedAction.type, "other");
-  assert.ok(repaired.contribution.proposedAction.detail);
-  assert.equal(validateReviewResult(threadProposal(null), Date.now(), { looseThreadIds: [item.id] }).contribution.itemId, item.id);
-  const held = validateReviewResult(threadProposal(null), Date.now(), { looseThreadIds: [] });
-  assert.deepEqual([held.decision, held.contribution, held.repaired], ["hold", null, "loose-thread-without-item"]);
+  const send = text => runtime.handle({ method: "turn.send", botId: "atlas", params: { text }, operationId: crypto.randomUUID() });
+  await send("Yes please");
+  const first = mainTurns(codex).at(-1).params.additionalContext;
+  assert.match(first.initiativeProposals.value, /you sent Dawar this message on your own \(from your inner monologue\)/);
+  assert.ok(first.initiativeProposals.value.includes(publication.text));
+  const turn = codex.threads.get("thread-main").turns.at(-1);
+  turn.status = "completed";
+  codex.emit("notification", { method: "turn/completed", params: { threadId: "thread-main", turn } });
+  await settle();
+  await send("And then?");
+  assert.equal(mainTurns(codex).at(-1).params.additionalContext.initiativeProposals, undefined);
 });
 
-test("the review packet stays within its token bound and carries bridge-owned sections", async t => {
-  const { store, codex, runtime, dir } = await setup(t, { enable: false });
-  await writeFile(join(dir, "MEMORY.md"), `# Memory\n${"Dawar prefers short updates. ".repeat(1000)}`, { mode: 0o600 });
-  await writeFile(join(dir, "IDENTITY.md"), "Atlas — operations assistant.", { mode: 0o600 });
-  const main = codex.threads.get("thread-main");
-  for (let i = 0; i < 60; i++) main.turns.push({ id: `bulk-${i}`, status: "completed", startedAt: sec("2026-10-15T10:00:00Z") + i, items: [owner(`bu${i}`, `Message ${i} ${"lorem ipsum ".repeat(200)}`), answer(`ba${i}`, "ok ".repeat(400))] });
-  const brief = { role: "You are Atlas.", priorities: "Clients first.", schedules: ["Daily report · 0 9 * * *"], queue: ["Draft the newsletter"], bots: [{ name: "Connie", role: "communications" }],
-    ledger: [{ id: "initiative-1", kind: "loose-thread", title: "Call Acme", due: true, mentions: [{ bot: "Atlas", at: "2026-10-13T15:00:00.000Z", quote: "call Acme about their renewal" }] }] };
-  for (const maxTokens of [5000, 12000]) {
-    const packet = await buildReviewPacket(runtime, store.bot("atlas"), brief, { maxTokens });
-    assert.ok(packet.tokens <= maxTokens, `${packet.tokens} <= ${maxTokens}`);
-    assert.ok(packet.tokens >= maxTokens * 0.6, "a busy bot fills most of the packet");
-    assert.equal(packet.tokens, estimateTokens(packet.text));
-    for (const part of ["call Acme about their renewal", "Atlas — operations assistant", "Dawar prefers short updates", "Daily report", "Draft the newsletter", `Message 59`])
-      assert.ok(packet.text.includes(part), part);
-  }
+test("an ambiguous delivery is reconciled against the node record before any retry", async t => {
+  const { store, runtime, coordinator, drive } = await setup(t, { reply: thinkReply(SPEAK) });
+  await drive(4);
+  const [p] = store.list("initiativePublication");
+  assert.equal(p.state, "published");
+  store.put("initiativePublication", { ...p, state: "uncertain", reconcileAfter: null });
+  await coordinator.tick();
+  assert.equal(store.get("initiativePublication", p.id).state, "published");
+  assert.equal(store.list("notice").length, 1, "reconciliation projects nothing twice");
+  const other = { ...p, id: "initiative-publication:lost-1234", state: "uncertain", attempts: 1, reconcileAfter: null };
+  store.put("initiativePublication", other);
+  assert.equal((await runtime.privateReviews.handle("initiative.node.reconcile", "atlas", { publicationId: other.id })).state, "absent");
+  await coordinator.reconcilePublications();
+  assert.equal(store.get("initiativePublication", other.id).state, "pending");
+  const again = await runtime.privateReviews.handle("initiative.node.publish", "atlas", { publicationId: p.id, text: p.text, expectedRevision: "x" });
+  assert.equal(again.state, "delivered");
+  await assert.rejects(Promise.resolve().then(() => runtime.privateReviews.handle("initiative.node.publish", "atlas", { publicationId: p.id, text: "different", expectedRevision: "x" })), /different content/);
 });
 
-test("Claude: extraction and review run as standalone tool-free SDK queries and the proposal is projected", async t => {
-  const dir = await mkdtemp(join(tmpdir(), "initiative-claude-"));
+test("Claude: thinking and speaking run as standalone tool-free SDK queries, and the message is projected", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "mind-claude-"));
   const store = new Store(join(dir, "state.sqlite")), log = [];
-  let itemId = null;
   const claude = new ClaudeBackend({ store, credential: "test", configDir: join(dir, "claude"), mcp: fakeMcp, query: fakeQuery(async (user, ctx) => {
     if (ctx.options.outputFormat) {
-      const extract = Boolean(ctx.options.outputFormat.schema.properties.mentions);
-      const prompt = user.message.content[0].text;
-      const id = prompt.match(/\[([^\]]+)\] 20/)?.[1];
-      const out = extract ? (id ? { mentions: [{ ...ACME.mentions[0], message_id: id, quote: "call Acme about their renewal" }], resolutions: [] } : NO_MENTIONS)
-        : (itemId = store.list("initiativeItem")[0]?.id) ? threadProposal(itemId) : NONE;
+      const out = ctx.options.outputFormat.schema.properties.thought ? SPEAK : SPOKEN;
       return [{ type: "result", subtype: "success", is_error: false, result: "", structured_output: out, total_cost_usd: 0.004,
         usage: { input_tokens: 900, output_tokens: 120, cache_read_input_tokens: 300, cache_creation_input_tokens: 0 } }];
     }
@@ -502,311 +486,55 @@ test("Claude: extraction and review run as standalone tool-free SDK queries and 
   const bot = await runtime.handle({ method: "bots.create", params: { name: "Claudia", provider: "claude" }, operationId: "create-claudia" });
   await runtime.handle({ method: "turn.send", botId: bot.id, params: { text: "We should call Acme about their renewal before Friday." }, operationId: crypto.randomUUID() });
   await until(() => !store.bot(bot.id).activeTurnId, "the Claude turn finished");
-  const clock = { t: Date.now() };
+  // Midday in Toronto, outside quiet hours.
+  const clock = { t: Date.parse("2026-10-15T16:00:00Z") };
   runtime.privateReviews.clock = () => clock.t;
   const coordinator = new InitiativeCoordinator({ store, executor: localExecutor(runtime), bots: () => store.bots(), clock: () => clock.t, random: () => 0 });
-  coordinator.ledger.configure({ enabled: true, claudeModel: "", claudeExtractionModel: "haiku" });
-  const turnsBefore = claude.data.turns(bot.threadId).length;
-  const sessionsBefore = claude.sessions.size;
-  // One coordinator tick, then the standalone Claude runs it started.
+  coordinator.ledger.configure({ enabled: true });
+  const turnsBefore = claude.data.turns(bot.threadId).length, sessionsBefore = claude.sessions.size;
   const drive = async n => { for (let i = 0; i < n; i++) { await coordinator.tick(); await runtime.privateReviews.settled(); } };
   await drive(4);
-  const [item] = store.list("initiativeItem");
-  assert.equal(item?.kind, "loose-thread");
-  assert.equal(item.mentions[0].quote, "call Acme about their renewal");
-  assert.equal(item.mentions[0].threadId, bot.threadId);
   const runs = log.filter(ctx => ctx.options.outputFormat);
-  assert.ok(runs.length >= 2);
+  assert.equal(runs.length, 2);
   for (const ctx of runs) {
     assert.equal(ctx.options.persistSession, false);
     assert.deepEqual(ctx.options.tools, []);
     assert.deepEqual(ctx.options.mcpServers, {});
     assert.deepEqual(ctx.options.settingSources, []);
-    assert.equal(ctx.options.outputFormat.type, "json_schema");
     assert.notEqual(ctx.options.cwd, bot.cwd);
     assert.equal((await ctx.options.canUseTool("Bash", {})).behavior, "deny");
   }
-  assert.equal(runs[0].options.model, "haiku", "mention capture uses the small model");
-  assert.equal(runs[1].options.model, "opus", "the review uses the bot's own model");
+  assert.equal(runs[0].options.model, "haiku", "thinking uses the light model");
   assert.equal(runs[0].options.effort, undefined, "Haiku has no reasoning-effort levels, so none is passed");
+  assert.equal(runs[1].options.model, "opus", "the message is written with the bot's own model");
   assert.equal(claude.data.turns(bot.threadId).length, turnsBefore, "no Claude turn was written");
   assert.equal(claude.sessions.size, sessionsBefore, "no session was loaded");
-  const extraction = store.list("initiativeReview").find(r => r.kind === "extract" && r.usage);
-  assert.deepEqual(extraction.usage, { totalTokens: 1320, inputTokens: 1200, cachedInputTokens: 300, outputTokens: 120, costUsd: 0.004 });
-  // Make the thread due and let the review raise it.
-  clock.t += 3 * 36e5; coordinator.nextScanAt = 0;
-  await drive(4);
-  const publication = store.list("initiativePublication").find(p => p.itemId === item.id);
-  assert.equal(publication?.state, "published");
-  assert.match(publication.text, /you mentioned: “call Acme about their renewal”/);
-  const view = await conversationViewPage(runtime, store.bot(bot.id), null);
-  assert.ok(view.entries.some(e => e.item?.id === `initiative:${publication.id}`));
-  // The next turn tells the bot about its own proposal.
-  const before = log.find(ctx => !ctx.options.outputFormat && ctx.options.cwd === bot.cwd);
-  await runtime.handle({ method: "turn.send", botId: bot.id, params: { text: "yes, proceed" }, operationId: crypto.randomUUID() });
-  await until(() => !store.bot(bot.id).activeTurnId, "the Claude turn finished");
-  assert.ok(before.last.message.content.some(c => c.text?.startsWith("<initiativeProposals>") && c.text.includes("call Acme about their renewal")));
-});
-
-test("next-turn context: the bot hears about a delivered proposal exactly once", async t => {
-  const { store, codex, runtime, drive } = await setup(t, { reply: kind => kind === "extract" ? NO_MENTIONS : review() });
-  await drive(7);
+  assert.deepEqual(store.list("initiativeReview").find(r => r.kind === "think").usage, { totalTokens: 1320, inputTokens: 1200, cachedInputTokens: 300, outputTokens: 120, costUsd: 0.004 });
   const [publication] = store.list("initiativePublication");
   assert.equal(publication.state, "published");
-  const send = text => runtime.handle({ method: "turn.send", botId: "atlas", params: { text }, operationId: crypto.randomUUID() });
-  await send("Tell me more");
-  const first = mainTurns(codex).at(-1).params.additionalContext;
-  assert.match(first.initiativeProposals.value, /while you were idle, the bridge sent Dawar this proposal/);
-  assert.ok(first.initiativeProposals.value.includes(publication.text));
-  assert.ok(first.initiativeProposals.value.includes(publication.itemId));
-  const turn = codex.threads.get("thread-main").turns.at(-1);
-  turn.status = "completed";
-  codex.emit("notification", { method: "turn/completed", params: { threadId: "thread-main", turn } });
-  await settle();
-  await send("And then?");
-  assert.equal(mainTurns(codex).at(-1).params.additionalContext.initiativeProposals, undefined);
+  assert.equal(publication.text, SPOKEN.message);
+  const view = await conversationViewPage(runtime, store.bot(bot.id), null);
+  assert.ok(view.entries.some(e => e.item?.id === `initiative:${publication.id}`));
 });
 
-test("Settings lists open loose threads with source and age, and dismiss/snooze/resolve act on them", async t => {
-  const { store, coordinator, drive, clock } = await setup(t, { reply: kind => kind === "extract" ? ACME : NONE });
-  await drive(4);
-  const status = coordinator.status("atlas");
-  assert.equal(status.looseThreads.length, 1);
-  const [row] = status.looseThreads;
-  assert.equal(row.title, "Call Acme about the renewal");
-  assert.equal(row.mentions[0].bot, "Atlas");
-  assert.equal(row.mentions[0].quote, "call Acme about their renewal");
-  assert.equal(row.ageHours, 47);
-  assert.equal(row.responsibleName, "Atlas");
-  assert.equal(status.metrics.openLooseThreads, 1);
-  assert.equal(status.metrics.extractionTokens, 1200);
-  assert.ok(status.metrics.extractions >= 1);
-  assert.equal(status.bot.supported, true);
-  assert.deepEqual(status.bots.map(b => [b.botId, b.name, b.included]), [["atlas", "Atlas", true]], "every bot's state for the global status table");
-  assert.ok(status.bots[0].lastReviewAt);
-  const snoozed = coordinator.threadAction(row.id, "snooze", { until: new Date(clock.t + 864e5).toISOString() });
-  assert.equal(snoozed.status, "snoozed");
-  assert.equal(coordinator.threadAction(row.id, "resolve").status, "resolved");
-  assert.equal(store.get("initiativeItem", row.id).resolution.kind, "owner-done");
-  assert.equal(coordinator.status("atlas").metrics.openLooseThreads, 0);
-  assert.equal(coordinator.threadAction(row.id, "dismiss").status, "dismissed");
-  assert.throws(() => coordinator.threadAction(row.id, "explode"), /dismiss, snooze or resolve/);
-  // The bot tool lists loose threads with Dawar's words.
-  assert.equal(coordinator.tool("atlas", { operation: "list" }).items[0].mentions[0].quote, "call Acme about their renewal");
-});
-
-test("triage reviews only bots with a signal, at most N per scan", async t => {
-  const { store, coordinator, clock } = await setup(t, { bots: ["atlas", "bea", "cyd"] });
-  coordinator.ledger.configure({ triage: true, triageMaxReviews: 1, looseThreads: false });
-  for (const id of ["atlas", "bea", "cyd"]) coordinator.saveBotState(id, { lastReviewAt: new Date(clock.t - 3 * 36e5).toISOString(), nextReviewAt: new Date(clock.t - 36e5).toISOString() });
-  // Only Bea has new activity since its last review.
-  store.saveBot({ ...store.bot("bea"), updatedAt: new Date(clock.t - 6e4).toISOString() });
-  coordinator.scan(coordinator.ledger.settings());
-  assert.deepEqual(coordinator.backlog.map(e => e.botId), ["bea"]);
-  assert.equal(store.get("initiativeBot", "atlas").lastSkip, "triage");
-});
-
-test("an ambiguous delivery is reconciled against the node record before any retry", async t => {
-  const { store, runtime, coordinator, drive } = await setup(t, { reply: kind => kind === "extract" ? NO_MENTIONS : review() });
-  await drive(6);
-  // Simulate a publish call whose answer was lost after the node delivered.
-  const [p] = store.list("initiativePublication");
-  assert.equal(p.state, "published");
-  store.put("initiativePublication", { ...p, state: "uncertain", reconcileAfter: null });
-  await coordinator.tick();
-  assert.equal(store.get("initiativePublication", p.id).state, "published");
-  assert.equal(store.list("notice").length, 1, "reconciliation projects nothing twice");
-  // A lost call that never reached the node is absent, then retried once.
-  const other = { ...p, id: "initiative-publication:lost-1234", state: "uncertain", attempts: 1, reconcileAfter: null };
-  store.put("initiativePublication", other);
-  assert.equal((await runtime.privateReviews.handle("initiative.node.reconcile", "atlas", { publicationId: other.id })).state, "absent");
-  await coordinator.reconcilePublications();
-  assert.equal(store.get("initiativePublication", other.id).state, "pending");
-  // Idempotent by publication id.
-  const again = await runtime.privateReviews.handle("initiative.node.publish", "atlas", { publicationId: p.id, text: p.text, expectedRevision: "x" });
-  assert.equal(again.state, "delivered");
-  await assert.rejects(Promise.resolve().then(() => runtime.privateReviews.handle("initiative.node.publish", "atlas", { publicationId: p.id, text: "different", expectedRevision: "x" })), /different content/);
-});
-
-test("replies update the ledger; older reviews cannot overwrite newer decisions", async t => {
-  const { store, coordinator, clock, drive } = await setup(t, { reply: kind => kind === "extract" ? NO_MENTIONS : review() });
-  await drive(7);
-  const [item] = store.list("initiativeItem");
-  assert.equal(item.status, "published");
-  // publishedAt is the runtime's real deliveredAt; a reply is only counted after it.
-  clock.t = Math.max(clock.t, Date.now());
-  coordinator.observeUserMessage("atlas", { type: "userMessage", id: "reply-1", content: [{ type: "text", text: "Next week" }] });
-  let current = store.get("initiativeItem", item.id);
-  assert.equal(current.status, "snoozed");
-  assert.equal(Date.parse(current.snoozedUntil), clock.t + 7 * 864e5);
-  coordinator.observeUserMessage("atlas", { type: "userMessage", id: "reply-2", content: [{ type: "text", text: "leave it" }] });
-  assert.equal(store.get("initiativeItem", item.id).status, "snoozed");
-  assert.equal(coordinator.tool("atlas", { operation: "record", itemId: item.id, outcome: "dismissed" }).status, "dismissed");
-  assert.throws(() => coordinator.tool("bea", { operation: "record", itemId: item.id, outcome: "approved" }), /not yours/);
-  const capture = { ledgerVersion: 0, startedAt: "2026-10-15T13:00:00.000Z", reviewId: "old" };
-  const applied = coordinator.ledger.applyReview("atlas", validateReviewResult(JSON.stringify({ decision: "none", contribution: null, next_review_hours: null,
-    ledger_updates: [{ item_id: item.id, key: item.key, title: item.title, kind: "opportunity", status: "resolved", note: null, sources: [], next_review_hours: null }] })), capture);
-  assert.deepEqual(applied.ignored, [{ itemId: item.id, reason: "newer-owner-decision" }]);
-  assert.equal(store.get("initiativeItem", item.id).status, "dismissed");
-  assert.equal(coordinator.ledger.deliveryBlock("atlas", item.id), "item-dismissed");
-});
-
-test("delivery spacing, daily limits and a reminder cap when one is configured", async t => {
-  const dir = await mkdtemp(join(tmpdir(), "initiative-limits-"));
-  const store = new Store(join(dir, "s.sqlite"));
-  t.after(async () => { store.close(); await rm(dir, { recursive: true, force: true }); });
-  let now = Date.parse("2026-10-15T14:00:00Z");
-  const ledger = new InitiativeLedger(store, { clock: () => now, random: () => 0.5 });
-  const capture = { ledgerVersion: 0, startedAt: new Date(now).toISOString(), reviewId: "r" };
-  const make = (botId, key) => ledger.applyReview(botId, validateReviewResult(output({ contribution: { key, title: key } })), capture).contribution.itemId;
-  const publish = (botId, itemId) => ledger.markPublished({ id: `p-${itemId}-${now}`, botId, itemId, createdAt: new Date(now).toISOString() });
-  ledger.configure({ perBotDaily: 2, globalDaily: 5, reminderHours: 72, maxReminders: 1, spacingMinMinutes: 3, spacingMaxMinutes: 5 });
-  const a = make("a", "one"), b = make("a", "two"), c = make("a", "three");
-  publish("a", a);
-  assert.equal(ledger.deliveryBlock("a", b), "spacing");
-  now += 4 * 6e4;
-  assert.equal(ledger.deliveryBlock("a", b), null);
-  publish("a", b);
-  now += 6 * 6e4;
-  assert.equal(ledger.deliveryBlock("a", c), "bot-daily-limit");
-  for (const bot of ["x", "y", "z"]) { const id = make(bot, `${bot}-item`); assert.equal(ledger.deliveryBlock(bot, id), null); publish(bot, id); now += 6 * 6e4; }
-  assert.equal(ledger.deliveryBlock("w", make("w", "w-item")), "global-daily-limit");
-  assert.equal(ledger.deliveryBlock("a", a), "awaiting-reply");
-  now += 73 * 36e5;
-  assert.equal(ledger.deliveryBlock("a", a), null);
-  publish("a", a);
-  now += 73 * 36e5;
-  assert.equal(ledger.deliveryBlock("a", a), "reminder-used");
-  assert.equal(ledger.deliveryBlock("a", a, { changedCircumstances: true }), null);
-  assert.equal(limitDay(Date.parse("2026-10-16T03:30:00Z")), "2026-10-15", "limits follow the Toronto calendar day");
-});
-
-test("result validation and reply classification", () => {
-  assert.throws(() => validateReviewResult("not json"), /JSON/);
-  assert.throws(() => validateReviewResult(output({ contribution: { evidence: [] } })), /evidence/);
-  assert.throws(() => validateReviewResult(JSON.stringify({ decision: "none", contribution: null, next_review_hours: null,
-    ledger_updates: [{ item_id: "x", key: "k", title: "t", kind: "opportunity", status: "dismissed", note: null, sources: [], next_review_hours: null }] })), /owner decision/);
-  assert.equal(validateReviewResult(output()).contribution.kind, "opportunity");
-  assert.equal(classifyReply("Yes, proceed").outcome, "approved");
-  assert.equal(classifyReply("make it a todo").outcome, "approved");
-  assert.equal(classifyReply("leave it").outcome, "dismissed");
-  assert.equal(classifyReply("drop it").outcome, "dismissed");
-  assert.equal(classifyReply("done").outcome, "resolved");
-  assert.equal(classifyReply("next week").outcome, "snoozed");
-  assert.equal(classifyReply("Can you explain the second point in more detail before I decide?"), null);
-  assert.equal(ownerReplyText({ content: [{ type: "text", text: "Quoted...\nNew user message:\nyes, proceed" }] }), "yes, proceed");
-  assert.equal(PRIVATE_REVIEW_CONFIG["features.multi_agent"], false);
-});
-
-// ---- Oct 15 efficiency pass: always-on, review on change, nag until answered ----
-
-test("version 1 settings follow the new defaults unless Dawar chose a value", async t => {
-  const dir = await mkdtemp(join(tmpdir(), "initiative-v1-"));
-  const store = new Store(join(dir, "s.sqlite"));
-  t.after(async () => { store.close(); await rm(dir, { recursive: true, force: true }); });
-  store.meta("initiative-settings", { version: 1, enabled: true, coverage: "all", model: "", claudeModel: "", extractionEffort: "low", baselineMinutes: 120,
-    reminderHours: 72, perBotDaily: 7, globalDaily: 5, spacingMinMinutes: 3, spacingMaxMinutes: 5, priorities: "Clients first", revision: 3 });
-  const s = new InitiativeLedger(store).settings();
-  assert.deepEqual([s.model, s.claudeModel, s.extractionEffort, s.baselineMinutes, s.reminderHours, s.globalDaily], ["gpt-6-luna", "haiku", "medium", 360, 12, 20]);
-  assert.deepEqual([s.enabled, s.perBotDaily, s.priorities, s.revision, s.version], [true, 7, "Clients first", 3, 2], "chosen values are kept");
-});
-
-test("a busy bot is reviewed privately; its proposal waits until the bot is idle", async t => {
-  const { store, codex, runtime, drive } = await setup(t, { reply: kind => kind === "extract" ? NO_MENTIONS : review() });
-  runtime.saveBot(store.bot("atlas"), { activeTurnId: "turn-live", status: "running" });
-  await drive(6);
-  assert.ok(kinds(store).includes("review:accepted"), "the review ran while the bot was working");
-  assert.equal(mainTurns(codex).length, 0, "the main conversation is not touched");
-  const p = store.list("initiativePublication")[0];
-  assert.ok(p && p.state === "held", "delivery waits for idle");
-  runtime.saveBot(store.bot("atlas"), { activeTurnId: null, status: "idle" });
-  await drive(4);
-  assert.equal(store.get("initiativePublication", p.id).state, "published");
-});
-
-test("a bot nudges about one open proposal at a time, rotating, without a model call", async t => {
-  const { store, codex, coordinator, clock } = await setup(t);
-  const ledger = coordinator.ledger, settings = () => ledger.settings();
-  const capture = { ledgerVersion: 0, startedAt: new Date(clock.t).toISOString(), reviewId: "r" };
-  const raise = (key, title) => ledger.applyReview("atlas", validateReviewResult(output({ contribution: { key, title } })), capture).contribution.itemId;
-  const quote = raise("vendor-quote", "Chase the vendor quote");
-  ledger.markPublished({ id: "p-quote", botId: "atlas", itemId: quote, createdAt: new Date(clock.t).toISOString() });
-  clock.t += 60e3;
-  const deck = raise("pitch-deck", "Refresh the pitch deck");
-  ledger.markPublished({ id: "p-deck", botId: "atlas", itemId: deck, createdAt: new Date(clock.t).toISOString() });
-  const startsBefore = jobStarts(codex).length;
-  const nudges = () => store.list("initiativePublication").filter(p => p.reminder);
-  const deliver = () => { for (const p of nudges().filter(p => p.state === "pending")) { ledger.markPublished({ ...p, publishedAt: new Date(clock.t).toISOString() }); store.put("initiativePublication", { ...p, state: "published" }); } };
-  clock.t += 11 * 36e5;
-  coordinator.queueReminders(settings());
-  assert.equal(nudges().length, 0, "not before the interval");
-  clock.t += 2 * 36e5;
-  coordinator.queueReminders(settings()); coordinator.queueReminders(settings());
-  assert.equal(nudges().length, 1, "one nudge per bot, not one per item");
-  assert.equal(nudges()[0].itemId, quote, "the one raised longest ago goes first");
-  assert.match(nudges()[0].text, /Chase the vendor quote/);
-  assert.match(nudges()[0].text, /one other thing waiting on you/);
-  assert.doesNotMatch(nudges()[0].text, /pitch deck/, "the others are mentioned, not listed");
-  deliver();
-  clock.t += 13 * 36e5;
-  coordinator.queueReminders(settings());
-  assert.equal(nudges().find(p => p.state === "pending").itemId, deck, "then the next one");
-  deliver();
-  assert.equal(jobStarts(codex).length, startsBefore, "nudges need no review");
-  // Answering takes an item out of rotation; the rest keep coming, alone.
-  ledger.recordOutcome(deck, "dismissed");
-  clock.t += 13 * 36e5;
-  coordinator.queueReminders(settings());
-  const next = nudges().find(p => p.state === "pending");
-  assert.equal(next.itemId, quote);
-  assert.doesNotMatch(next.text, /other thing/);
-  ledger.recordOutcome(quote, "dismissed");
-  store.put("initiativePublication", { ...next, state: "abandoned" });
-  clock.t += 13 * 36e5;
-  coordinator.queueReminders(settings());
-  assert.equal(nudges().filter(p => p.state === "pending").length, 0);
-});
-
-test("proactive pushes carry the message itself", () => {
-  assert.equal(pushPreview("**Quick nudge** on **Chase the vendor quote** — they owe us pricing.\n\n_Ref initiative-1: reply …_"),
-    "Quick nudge on Chase the vendor quote — they owe us pricing.");
-  assert.equal(pushPreview("x".repeat(400)).length, 180);
-  assert.equal(pushPreview(""), "");
-});
-
-test("a stalled time-sensitive item moves to a bot that is being reviewed", async t => {
-  const { store, coordinator, clock } = await setup(t, { bots: ["atlas", "bea"] });
-  const at = iso => new Date(iso).toISOString();
-  store.put("initiativeItem", { id: "initiative-due", botId: "atlas", responsibleBotId: "atlas", kind: LOOSE_THREAD, status: "candidate", title: "Confirm the Musco due date",
-    key: "musco-due", timeSensitive: true, resurfaceAt: at(clock.t - 20 * 36e5), contributors: [], notes: [], createdAt: at(clock.t - 30 * 36e5) });
-  coordinator.saveBotState("atlas", { skippedSince: at(clock.t - 14 * 36e5) });
-  coordinator.saveBotState("bea", { lastReviewAt: at(clock.t - 36e5) });
-  coordinator.handOffStalled(coordinator.ledger.settings());
-  const item = coordinator.ledger.item("initiative-due");
-  assert.equal(item.responsibleBotId, "bea");
-  assert.deepEqual(item.contributors, ["atlas"]);
-  assert.match(item.notes.at(-1).text, /Handed to Bea after 12h/);
-});
-
-test("reviews read only the last 72 hours of high-level exchange", async t => {
+test("recent conversation: the last 72 hours of high-level exchange only", async t => {
   const { store, codex, runtime, clock } = await setup(t, { enable: false });
   codex.threads.get("thread-main").turns.unshift({ id: "turn-old", status: "completed", startedAt: (clock.t - 5 * 864e5) / 1000, items: [owner("u-old", "an ancient request"), answer("a-old", "ok")] });
   codex.threads.get("thread-main").turns.push({ id: "turn-new", status: "completed", startedAt: (clock.t - 36e5) / 1000, items: [owner("u-new", "a fresh request"), answer("a-new", "on it")] });
   const before = codex.calls.length;
   const text = await recentConversation(runtime, store.bot("atlas"), 20000, { hours: 72, clock: () => clock.t });
-  assert.match(text, /a fresh request/);
+  assert.match(text, /Dawar: a fresh request\nYou: on it/);
   assert.doesNotMatch(text, /ancient request/);
   const reads = codex.calls.slice(before).filter(c => c.method === "thread/turns/list");
   assert.ok(reads.length && reads.every(c => c.params.itemsView === "summary"), "summary view: no tool payloads");
-  const mark = codex.calls.length;
-  await readOwnerMessages(runtime, store.bot("atlas"), null, { clock: () => clock.t });
-  assert.ok(codex.calls.slice(mark).filter(c => c.method === "thread/turns/list").every(c => c.params.itemsView === "summary"));
 });
 
-test("Claude reviews pause near the subscription limit", () => {
+test("pushes carry the message itself; Claude thinking pauses near the subscription limit", () => {
+  assert.equal(pushPreview("**Quick nudge** on **the vendor quote** — they owe us pricing.\n\nMore detail."), "Quick nudge on the vendor quote — they owe us pricing.");
+  assert.equal(pushPreview("x".repeat(400)).length, 180);
   const router = rateLimits => ({ claude: { usage: () => ({ rateLimits }) } });
   assert.equal(claudeNearLimit(router([{ status: "allowed", utilization: 0.85 }]), 80), true);
   assert.equal(claudeNearLimit(router([{ status: "allowed", utilization: 0.5 }]), 80), false);
   assert.equal(claudeNearLimit(router([{ status: "rejected" }]), 80), true);
-  assert.equal(claudeNearLimit({}, 80), false, "no Claude backend: nothing to guard");
+  assert.equal(claudeNearLimit({}, 80), false);
 });

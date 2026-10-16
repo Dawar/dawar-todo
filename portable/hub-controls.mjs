@@ -188,15 +188,15 @@ export class HubControls extends EventEmitter {
       this.store.saveOperation(operationId,binding,'done',{method,botId,params,caller,result:{},localOnly:'portable-hub-initiative',createdAt:now()});
       return this.initiative.status(b.id);
     }
-    if(method==='initiative.thread'){
-      // Owner action on one loose thread from Settings: dismiss, snooze or resolve.
-      if(!this.initiative)throw Object.assign(Error('Proactive initiative is unavailable on this hub.'),{outcome:'rejected'});
-      if(caller.kind!=='owner'||!id(operationId))throw Object.assign(Error('Loose-thread actions belong to the authenticated owner.'),{outcome:'rejected'});
+    if(method==='initiative.think'){
+      // Owner asks one bot to think now (its Mind panel); the thought runs on the next tick.
+      if(!this.initiative)throw Object.assign(Error('Proactive bots are unavailable on this hub.'),{outcome:'rejected'});
+      if(caller.kind!=='owner'||!id(operationId))throw Object.assign(Error('Thinking on demand belongs to the authenticated owner.'),{outcome:'rejected'});
       this.assertWriter();const binding=fingerprint({owner,method,botId,params}),prior=this.store.operation(operationId);
-      if(prior){if(prior.fingerprint!==binding)throw Error('Original loose-thread operation changed.');return this.initiative.status(b.id);}
-      try{this.initiative.threadAction(params.itemId,params.action,{until:params.until??null});}catch(error){error.outcome='rejected';throw error;}
+      if(prior){if(prior.fingerprint!==binding)throw Error('Original think-now operation changed.');return this.initiative.status(b.id);}
+      const result=this.initiative.thinkNow(b.id);
       this.store.saveOperation(operationId,binding,'done',{method,botId,params,caller,result:{},localOnly:'portable-hub-initiative',createdAt:now()});
-      return this.initiative.status(b.id);
+      return result;
     }
     if(method==='bursts.typing'){
       if(caller.kind!=='owner')throw Error('Typing belongs to the authenticated owner browser.');

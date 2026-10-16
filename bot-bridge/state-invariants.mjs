@@ -381,12 +381,12 @@ function checkHubStore(s, db, bots) {
     for (const st of records(db, 'initiativeBot', `json_extract(json,'$.lastSkipAt') IS NOT NULL`, limit)) {
       const bot = bots.get(st.botId);
       if (!bot || bot.archived || bot.deletedAt) continue;
-      const lastReview = time(st.lastReviewAt), lastSkip = time(st.lastSkipAt);
+      const lastReview = time(st.lastThinkAt ?? st.lastReviewAt), lastSkip = time(st.lastSkipAt);
       if (Number.isFinite(lastReview) && lastReview >= lastSkip) continue;
-      const since = time(st.skippingSince ?? st.lastReviewAt), ms = s.now - since;
+      const since = time(st.skippedSince ?? st.skippingSince ?? st.lastThinkAt ?? st.lastReviewAt), ms = s.now - since;
       if (!(ms > s.o.initiativeSkipMs) || s.now - lastSkip > s.o.initiativeSkipMs) continue;
       s.add({ check: 'initiative-skipped', severity: 'medium', store: 'hub', botId: st.botId, record: { kind: 'initiativeBot', id: st.id }, ageMs: ms,
-        message: `Proactive reviews have skipped this bot for ${age(ms)} (last reason: ${st.lastSkip}).`,
+        message: `Proactive thinking has skipped this bot for ${age(ms)} (last reason: ${st.lastSkip}).`,
         suggestedAction: st.lastSkip === 'not-idle' ? 'The node’s idle check keeps reporting busy; compare it with the node’s pending work (busy-without-blocker).' : 'Check why the probe keeps refusing this bot.' });
     }
   });

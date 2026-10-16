@@ -267,7 +267,7 @@ test('portable runner hands notices to the hub; the hub stores each once in the 
   sqlite.close();
 });
 
-test('proactive reviews refused for longer than a day become a visible skip hold; triage and a finished review do not', async t => {
+test('thinking refused for longer than a day becomes a visible skip hold; a finished thought clears it', async t => {
   const { store } = await setup(t);
   let now = Date.parse('2026-10-15T12:00:00Z');
   const coordinator = new InitiativeCoordinator({ store, executor: {}, bots: () => [], clock: () => now });
@@ -276,8 +276,8 @@ test('proactive reviews refused for longer than a day become a visible skip hold
   now += INITIATIVE_SKIP_BUDGET_MS / 2; coordinator.skip('bot-1', 'Still busy.');
   now += INITIATIVE_SKIP_BUDGET_MS / 2;
   assert.deepEqual(initiativeSkipHold(coordinator.botState('bot-1'), now),
-    { since: '2026-10-15T12:00:00.000Z', reason: 'Proactive reviews have been skipped for 24 hours: Still busy.' });
-  coordinator.saveBotState('bot-1', { lastReviewAt: new Date(now).toISOString(), skippedSince: null });
+    { since: '2026-10-15T12:00:00.000Z', reason: 'Thinking has been skipped for 24 hours: Still busy.' });
+  coordinator.saveBotState('bot-1', { lastThinkAt: new Date(now).toISOString(), skippedSince: null });
   assert.equal(initiativeSkipHold(coordinator.botState('bot-1'), now), null);
 });
 

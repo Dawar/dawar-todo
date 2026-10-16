@@ -1,17 +1,18 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { botProvider } from "./provider-router.mjs";
-import { REVIEW_OUTPUT_SCHEMA } from "./initiative-ledger.mjs";
-import { buildReviewPacket } from "./initiative-packet.mjs";
-import { readOwnerMessages, extractionPrompt, validateExtraction, EXTRACTION_OUTPUT_SCHEMA, EXTRACTION_INSTRUCTIONS } from "./initiative-mentions.mjs";
+import { THINK_SCHEMA, SPEAK_SCHEMA, THINK_INSTRUCTIONS, SPEAK_INSTRUCTIONS, thinkPrompt, speakPrompt } from "./mind.mjs";
+import { mindMaterials } from "./initiative-packet.mjs";
 
-// Node side of the proactive initiative. The hub coordinator decides WHEN a
-// bot is reviewed and WHAT is published; this executor owns the native work.
+// Node side of the bots' inner monologue (mind.mjs). The hub coordinator
+// decides WHEN a bot thinks and WHAT is delivered; this executor owns the
+// native work.
 //
 // Two kinds of private job, the same for Codex and Claude bots:
-//   extract — read Dawar's new messages since a cursor and turn them into
-//             loose threads (small model);
-//   review  — judge a bounded packet of bridge-owned data and maybe propose.
+//   think — the bot's identity, memory, own recent conversation and the
+//           hub's brief (its journal, loops, time) become one new thought
+//           and a decision to stay quiet or speak (light model);
+//   speak — the bot's own model writes the message a thought decided on.
 // Each runs once, tool-free and read-only, in a fresh disposable session on
 // the bot's own provider: Codex an ephemeral thread/start + one turn with an
 // outputSchema and no MCP or dynamic tools; Claude an Agent SDK query with
@@ -46,38 +47,6 @@ export const PRIVATE_REVIEW_CONFIG = Object.freeze({
   "mcp_servers.linux_computer_use": disabledServer,
   "mcp_servers.bot_desktop_linus": disabledServer,
 });
-export const REVIEW_INSTRUCTIONS = `This is a private initiative review for one of Dawar's persistent bots. Nothing you write here is shown to anyone; only a validated proposal may later be sent, as that bot's ordinary message.
-You have no tools: you cannot send messages, change tasks, read files or act on external systems. Judge only the packet below. Answer with the requested JSON only.`;
-
-export function reviewPrompt(brief, packet) {
-  return `${REVIEW_INSTRUCTIONS}
-
-${packet}
-
-# How to compete for Dawar's attention
-You are one of several bots competing, on merit, for Dawar's limited attention: only a few proposals reach him each day, and those limits are a hard cap.
-- Aim for the single most valuable, specific, evidence-backed proposal you can bring. A sharp, well-grounded proposal beats several weak ones; "none" beats padding.
-- You may propose taking on more ownership or responsibilities when that would make you more useful to him: name what you would own, why you are suited to it, and the first step.
-- Be honest: no exaggeration, no padding, and no undermining other bots. Cite the source of every claim (turn or message ids, quotes, items, schedules or artifacts from the packet) in evidence; leave out anything you cannot source.
-
-# Review
-First, loose threads — things Dawar mentioned that never reached anything conclusive:
-1. What did Dawar mention in the last hours or days that has not led to anything conclusive? (See "Loose threads"; "due": true marks ones whose time to come back has arrived.)
-2. Which one is most valuable or time-sensitive to raise now?
-3. What is the concrete next step to propose: create a todo, draft a message, schedule it, research it, or drop it?
-If the recent conversation shows a loose thread was concluded (todo created, decision made, message sent, meeting scheduled, artifact delivered, or Dawar said done/dropped), mark it "resolved" in ledger_updates with the evidence in note.
-
-Then, other initiative:
-4. What existing work or decision needs attention?
-5. What worthwhile opportunity could advance Dawar's priorities?
-6. Is there more ownership or responsibility you could take on that would make you more useful to him?
-
-There is no quota. Choose "publish" only for one concrete, grounded contribution that is useful now, with its evidence, expected value, a clearly labelled effort estimate and a useful first step. Prefer a due loose thread over a new opportunity.
-For a loose thread use kind "loose-thread", its item_id and key, and a proposed_action; the bridge itself opens the message with Dawar's original words and when he said them, so write "message" as what follows: why it matters now and what you suggest, in your normal voice, without repeating the quote. Never invent a loose thread; only Dawar's own mentions create them.
-Reuse an existing item_id/key when your contribution concerns the same underlying thing, even if another bot owns it. Do not repeat an item that is awaiting Dawar's reply, snoozed or dismissed unless circumstances materially changed (then set changed_circumstances true).
-Substantial research, implementation and external actions start only after Dawar approves.`;
-}
-
 /** Normalized usage across providers: { totalTokens, inputTokens, cachedInputTokens, outputTokens, costUsd }. */
 /** First line of a proposal for a push body: markdown and the reply reference removed. */
 export function pushPreview(text, max = 180) {
@@ -176,44 +145,36 @@ export class PrivateReviews {
   }
 
   // ---- private jobs -----------------------------------------------------------
-  async start(bot, { reviewId, kind = "review", brief, settings = {}, expectedRevision, cursor = null } = {}) {
+  async start(bot, { reviewId, kind = "think", brief, settings = {} } = {}) {
     if (!ID.test(reviewId ?? "")) throw Error("A stable review identity is required.");
-    if (!["review", "extract"].includes(kind)) throw Error("Unknown private job kind.");
+    if (!["think", "speak"].includes(kind)) throw Error("Unknown private job kind.");
     const prior = this.store.get("privateReview", reviewId);
     if (prior) { if (prior.botId !== bot.id) throw Error("Review belongs to another bot."); return this.view(prior); }
-    if (!brief || typeof brief !== "object" || !Array.isArray(brief.ledger)) throw Error("A review brief is required.");
+    if (!brief || typeof brief !== "object" || Array.isArray(brief)) throw Error("A brief is required.");
     // The bot's ordinary admission lock is held only for the admission check
     // and job creation, never for the run: user input is not delayed.
     return this.runtime.lock(bot.id, async () => {
-      // A busy bot may still be reviewed (read-only, private): only stopped,
-      // maintenance, unsupported and already-reviewing states refuse it.
+      // A busy bot may still think (read-only, private): only stopped,
+      // maintenance, unsupported and already-thinking states refuse it.
       const busyOk = settings.allowBusy === true;
       const local = this.localIdle(this.store.bot(bot.id), { locked: true });
       if (!local.idle && !(busyOk && local.reason === "not-idle")) return { id: reviewId, state: "refused", reason: local.reason };
       if (botProvider(bot) === "claude" && claudeNearLimit(this.codex, settings.claudeHeadroomPercent))
         return { id: reviewId, state: "refused", reason: "claude-limit" };
       const state = await this.nativeState(bot);
-      if (!busyOk && (!["idle", "notLoaded"].includes(state.status) || state.queued || state.goalActive || kind === "review" && state.revision !== expectedRevision))
-        return { id: reviewId, state: "refused", reason: "revision-changed" };
+      if (!busyOk && (!["idle", "notLoaded"].includes(state.status) || state.queued || state.goalActive))
+        return { id: reviewId, state: "refused", reason: "native-busy" };
       const record = { id: reviewId, botId: bot.id, threadId: bot.threadId, kind, provider: botProvider(bot), state: "starting", revision: state.revision,
         baseTurnId: state.lastTurnId, startedAt: this.at(), deadlineAt: new Date(this.clock() + (settings.timeoutSeconds ?? 180) * 1000).toISOString() };
       this.store.put("privateReview", record);
       try {
-        let prompt, schema, instructions;
-        if (kind === "extract") {
-          const batch = await readOwnerMessages(this.runtime, bot, cursor, { limit: settings.batch ?? 40, chars: settings.chars ?? 24000,
-            lookbackMs: (settings.lookbackHours ?? 72) * 36e5, clock: this.clock });
-          this.store.put("privateReview", { ...this.store.get("privateReview", reviewId), batch, cursor: batch.cursor, more: batch.more, knownItems: brief.ledger.map(t => t.id) });
-          // Nothing new from Dawar: advance the cursor without a model call.
-          if (!batch.messages.length && !(batch.actions.length && brief.ledger.length))
-            return this.view(await this.finish(reviewId, "completed", { output: { mentions: [], resolutions: [] }, usage: null, skippedModel: true }));
-          prompt = extractionPrompt({ bot, messages: batch.messages, actions: batch.actions, threads: brief.ledger, bots: brief.bots ?? [] });
-          schema = EXTRACTION_OUTPUT_SCHEMA; instructions = EXTRACTION_INSTRUCTIONS;
-        } else {
-          const packet = await buildReviewPacket(this.runtime, bot, brief, { maxTokens: settings.packetTokens ?? 12000, conversationHours: settings.conversationHours ?? 72 });
-          this.store.put("privateReview", { ...this.store.get("privateReview", reviewId), packetTokens: packet.tokens, packetSections: packet.sections });
-          prompt = reviewPrompt(brief, packet.text); schema = REVIEW_OUTPUT_SCHEMA; instructions = REVIEW_INSTRUCTIONS;
-        }
+        const name = bot.name ?? "this bot";
+        const materials = await mindMaterials(this.runtime, bot, { maxTokens: kind === "speak" ? 6000 : settings.packetTokens ?? 12000,
+          conversationHours: settings.conversationHours ?? 72 });
+        const prompt = kind === "think" ? thinkPrompt({ name, brief, ...materials })
+          : speakPrompt({ name, identity: materials.identity, conversation: materials.conversation, thought: String(brief.thought ?? ""), draft: String(brief.draft ?? ""), now: String(brief.now ?? "") });
+        const schema = kind === "think" ? THINK_SCHEMA : SPEAK_SCHEMA, instructions = kind === "think" ? THINK_INSTRUCTIONS : SPEAK_INSTRUCTIONS;
+        this.store.put("privateReview", { ...this.store.get("privateReview", reviewId), packetTokens: Math.ceil(prompt.length / 4) });
         const model = settings.model || bot.model || null, effort = settings.effort ?? null;
         if (botProvider(bot) === "claude") this.runClaude(bot, reviewId, { model, effort, prompt, schema, instructions });
         else await this.runCodex(bot, reviewId, { model, effort, fast: settings.fast === true, prompt, schema, instructions });
@@ -255,15 +216,8 @@ export class PrivateReviews {
         error => this.finish(reviewId, abort.signal.aborted ? "cancelled" : error.invalid ? "invalid" : "failed", { error: error.message })));
   }
   view(r) {
-    let output = TERMINAL.has(r.state) ? r.output ?? null : null, state = r.state, error = r.error ?? null;
-    // Extraction is validated here, against the exact batch it came from.
-    if (r.kind === "extract" && state === "completed") {
-      try { output = { extraction: validateExtraction(r.output, r.batch ?? { messages: [], actions: [] }, { clock: this.clock(), knownItems: new Set(r.knownItems ?? []) }) }; }
-      catch (e) { output = null; state = "invalid"; error = e.message; }
-    }
-    return { id: r.id, botId: r.botId, kind: r.kind ?? "review", state, reason: r.reason ?? null, revision: r.revision, startedAt: r.startedAt,
-      finishedAt: r.finishedAt ?? null, error, output, usage: r.usage ?? null, packetTokens: r.packetTokens ?? null,
-      ...(r.kind === "extract" ? { cursor: r.cursor ?? null, more: r.more === true, messages: r.batch?.messages?.length ?? 0 } : {}) };
+    return { id: r.id, botId: r.botId, kind: r.kind ?? "think", state: r.state, reason: r.reason ?? null, revision: r.revision, startedAt: r.startedAt,
+      finishedAt: r.finishedAt ?? null, error: r.error ?? null, output: TERMINAL.has(r.state) ? r.output ?? null : null, usage: r.usage ?? null, packetTokens: r.packetTokens ?? null };
   }
   poll(bot, reviewId) {
     const r = this.store.get("privateReview", String(reviewId ?? ""));
@@ -295,11 +249,8 @@ export class PrivateReviews {
     if (!r || r.botId !== bot.id) return { id: reviewId, state: "missing" };
     return this.view(await this.finish(r.id, state, { error: reason }) ?? r);
   }
-  /** User activity always wins over a review; extraction of past messages may finish. */
-  userActivity(botId) {
-    const r = this.active(botId);
-    if (r && (r.kind ?? "review") === "review") this.track(this.finish(r.id, "cancelled", { error: "Cancelled by user activity." }));
-  }
+  /** Thinking is private and read-only, so user activity lets it finish; the hub decides whether a message still fits. */
+  userActivity() {}
 
   // ---- hidden Codex job routing ---------------------------------------------------
   reviewFor(threadId) {
@@ -400,8 +351,8 @@ export class PrivateReviews {
 }
 export const initiativeItem = r => ({ type: "agentMessage", id: `initiative:${r.id}`, text: r.text, phase: "final_answer", memoryCitation: null, delivery: null, questions: null });
 
-/** Context the next turn carries so the bot knows what "it" sent while idle. */
+/** Context the next turn carries so the bot knows what it said on its own while idle. */
 export function proposalContext(records) {
-  return records.map(r => `At ${r.deliveredAt}, while you were idle, the bridge sent Dawar this proposal in this conversation as your message${r.itemId ? ` (initiative item ${r.itemId})` : ""}:\n<<<\n${r.text}\n>>>`).join("\n\n")
-    + `\n\nIt is part of this conversation even though you did not write it in a turn. Dawar's message may answer it; when he decides (yes, later, leave it, done), record that with bots_initiative operation=record and the item id, then follow your normal path for approved work.`;
+  return records.map(r => `At ${r.deliveredAt}, between conversations, you sent Dawar this message on your own (from your inner monologue):\n<<<\n${r.text}\n>>>`).join("\n\n")
+    + `\n\nIt is part of this conversation even though you did not write it in a turn; Dawar's message may be answering it. If it closes or changes something you were tracking, note that with bots_initiative operation=note.`;
 }

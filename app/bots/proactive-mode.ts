@@ -43,13 +43,13 @@ export function botPatch(mode: ProactiveMode, botId: string, on: boolean): Setti
 }
 
 export const MODE_COPY: Record<ProactiveMode, { label: string; detail: string }> = {
-  off: { label: "Off", detail: "Bots never bring things up on their own." },
-  pilot: { label: "Pilot", detail: "Only the bots you pick can bring things up." },
-  all: { label: "All bots", detail: "Every bot can bring things up, except ones you switch off." },
+  off: { label: "Off", detail: "Bots don't think or message you on their own." },
+  pilot: { label: "Pilot", detail: "Only the bots you pick think on their own." },
+  all: { label: "All bots", detail: "Every bot thinks on its own, except ones you switch off." },
 };
 
 /** One line under a bot's switch, saying what it means in the current mode. */
 export function botSwitchCopy(mode: ProactiveMode, name: string, on: boolean): string {
-  if (mode === "pilot") return on ? `${name} is in the pilot and may bring things up on its own.` : `${name} is not in the pilot. Switch on to include it.`;
-  return on ? `${name} may bring things up on its own. Switch off to leave it out.` : `${name} is left out while every other bot takes part.`;
+  if (mode === "pilot") return on ? `${name} is in the pilot: it thinks on its own and may message you.` : `${name} is not in the pilot. Switch on to include it.`;
+  return on ? `${name} thinks on its own and may message you. Switch off to leave it out.` : `${name} is left out while every other bot takes part.`;
 }
