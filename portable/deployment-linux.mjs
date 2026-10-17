@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import { readFile, readlink, chmod, mkdir, lstat, rm, rmdir } from 'node:fs/promises';
-import {existsSync} from 'node:fs';
+import {existsSync,createReadStream} from 'node:fs';
 import { join, isAbsolute, resolve, relative,dirname } from 'node:path';
 import { request } from 'node:http';
 import { DatabaseSync, backup } from 'node:sqlite';
@@ -14,6 +14,8 @@ import {closeBootstrap} from './bootstrap-close.mjs';
 import {linuxProbe,verifyPlan,ROLES} from './deploy-plan.mjs';
 
 const exec=promisify(execFile),hash=bytes=>createHash('sha256').update(bytes).digest('hex');
+// Database backups can exceed Node's single-buffer limit. Hash them in bounded chunks.
+const hashFile=async path=>{const digest=createHash('sha256');for await(const chunk of createReadStream(path))digest.update(chunk);return digest.digest('hex');};
 // Every refusal names what differed. Messages never include credentials.
 const failure=(reason='Deployment prerequisite differs.')=>Object.assign(Error(`${reason} Inspect the private original transaction; no lifecycle effect was repeated.`),{deploymentBlocked:true});
 const allowedUnit=/^[A-Za-z0-9_-]{8,100}\.service$/;
@@ -308,7 +310,7 @@ export function linuxDeployment(spec,{systemctl=async(...args)=>(await exec('sys
         if(!isAbsolute(path))throw failure(`databases[${i}] is not absolute.`);const db=new DatabaseSync(path,{readOnly:true}),destination=join(directory,`database-${i}.sqlite`);
         try{await backup(db,destination);}finally{db.close();}await chmod(destination,0o600);
         const check=new DatabaseSync(destination,{readOnly:true});try{if(check.prepare('PRAGMA integrity_check').get().integrity_check!=='ok')throw failure(`Backup of databases[${i}] failed integrity_check.`);}finally{check.close();}
-        results.push({path,destination,sha256:hash(await readFile(destination)),mode:'0600'});
+        results.push({path,destination,sha256:await hashFile(destination),mode:'0600'});
       }
       for(const [i,f] of spec.files.entries()){await exactBefore(f,`files[${i}].path`);if(f.beforeSHA256!==null)savePrivate(join(directory,`configuration-${i}`),(await readFile(f.path)).toString());}
       return {verified:true,databases:results,configurationFiles:spec.files.filter(f=>f.beforeSHA256!==null).length,restoreDatabasesOnRollback:false};
